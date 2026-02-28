@@ -16,6 +16,33 @@ const DEFAULT_THRESHOLDS = {
   suspicious: 50,
 };
 
+const toNumber = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const clamp01 = (value, fallback = 0.5) => {
+  const n = toNumber(value, fallback);
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+};
+
+const clamp100 = (value, fallback = 50) => {
+  const n = toNumber(value, fallback);
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return n;
+};
+
+const getLegacyValue = (source, key, fallback) => {
+  const raw = source?.[key];
+  if (raw && typeof raw === 'object' && raw.value !== undefined) {
+    return toNumber(raw.value, fallback);
+  }
+  return toNumber(raw, fallback);
+};
+
 const getAdminConfig = async () => {
   const cached = await getCache('admin:config');
   if (cached) return cached;
@@ -30,20 +57,60 @@ const getAdminConfig = async () => {
   return config;
 };
 
-const computeTrustScore = async ({
-  streamId,
-  videoScores,
-  voiceScore,
-  biometricScore,
-  blockchainScore,
-}) => {
-  const config = await getAdminConfig();
+const computeTrustScore = async (...args) => {
+  let streamId;
+  let videoScores;
+  let voiceScore;
+  let biometricScore;
+  let blockchainScore;
+  let config = {};
+
+  const isObjectMode =
+    args.length === 1 &&
+    args[0] &&
+    typeof args[0] === 'object' &&
+    (Object.prototype.hasOwnProperty.call(args[0], 'streamId') ||
+      Object.prototype.hasOwnProperty.call(args[0], 'videoScores'));
+
+  if (isObjectMode) {
+    ({ streamId, videoScores, voiceScore, biometricScore, blockchainScore } = args[0]);
+    config = await getAdminConfig();
+  } else {
+    // Backward-compatible signature used in unit tests:
+    // computeTrustScore(video, voice, biometric, blockchain, weights)
+    const [legacyVideo, legacyVoice, legacyBiometric, legacyBlockchain, legacyWeights] = args;
+
+    streamId = null;
+    videoScores = legacyVideo;
+    voiceScore = typeof legacyVoice === 'number' ? legacyVoice : legacyVoice?.overall_score;
+    biometricScore = typeof legacyBiometric === 'number' ? legacyBiometric : legacyBiometric?.sync_score;
+    blockchainScore =
+      typeof legacyBlockchain === 'number' ? legacyBlockchain : legacyBlockchain?.integrity_score;
+
+    config = {
+      video_weight: getLegacyValue(legacyWeights, 'video_weight', DEFAULT_WEIGHTS.video),
+      voice_weight: getLegacyValue(legacyWeights, 'voice_weight', DEFAULT_WEIGHTS.voice),
+      biometric_weight: getLegacyValue(legacyWeights, 'biometric_weight', DEFAULT_WEIGHTS.biometric),
+      blockchain_weight: getLegacyValue(legacyWeights, 'blockchain_weight', DEFAULT_WEIGHTS.blockchain),
+      safe_threshold: getLegacyValue(legacyWeights, 'safe_threshold', DEFAULT_THRESHOLDS.safe),
+      suspicious_threshold: getLegacyValue(
+        legacyWeights,
+        'suspicious_threshold',
+        DEFAULT_THRESHOLDS.suspicious
+      ),
+    };
+
+    if (videoScores && typeof videoScores.overall_score === 'number') {
+      const v = clamp01(videoScores.overall_score);
+      videoScores = { spatial_score: v, temporal_score: v, gan_score: v, rppg_score: v };
+    }
+  }
 
   const weights = {
-    video: config.video_weight || DEFAULT_WEIGHTS.video,
-    voice: config.voice_weight || DEFAULT_WEIGHTS.voice,
-    biometric: config.biometric_weight || DEFAULT_WEIGHTS.biometric,
-    blockchain: config.blockchain_weight || DEFAULT_WEIGHTS.blockchain,
+    video: toNumber(config.video_weight, DEFAULT_WEIGHTS.video),
+    voice: toNumber(config.voice_weight, DEFAULT_WEIGHTS.voice),
+    biometric: toNumber(config.biometric_weight, DEFAULT_WEIGHTS.biometric),
+    blockchain: toNumber(config.blockchain_weight, DEFAULT_WEIGHTS.blockchain),
   };
 
   // Normalize weights to sum to 1.0
@@ -52,15 +119,18 @@ const computeTrustScore = async ({
 
   // Video score: composite of spatial, temporal, GAN, rPPG
   const videoComposite = videoScores
-    ? (videoScores.spatial_score * 0.35 +
-        videoScores.temporal_score * 0.30 +
-        videoScores.gan_score * 0.25 +
-        videoScores.rppg_score * 0.10) * 100
+    ? clamp100(
+        (clamp01(videoScores.spatial_score) * 0.35 +
+          clamp01(videoScores.temporal_score) * 0.30 +
+          clamp01(videoScores.gan_score) * 0.25 +
+          clamp01(videoScores.rppg_score) * 0.10) * 100
+      )
     : 50;
 
-  const voiceComposite = typeof voiceScore === 'number' ? voiceScore * 100 : 50;
-  const biometricComposite = typeof biometricScore === 'number' ? biometricScore * 100 : 50;
-  const blockchainComposite = typeof blockchainScore === 'number' ? blockchainScore * 100 : 100;
+  const voiceComposite = typeof voiceScore === 'number' ? clamp100(voiceScore * 100) : 50;
+  const biometricComposite = typeof biometricScore === 'number' ? clamp100(biometricScore * 100) : 50;
+  const blockchainComposite =
+    typeof blockchainScore === 'number' ? clamp100(blockchainScore * 100, 100) : 100;
 
   const trustScore = Math.round(
     videoComposite * weights.video +
@@ -69,8 +139,8 @@ const computeTrustScore = async ({
       blockchainComposite * weights.blockchain
   );
 
-  const safeThreshold = config.safe_threshold || DEFAULT_THRESHOLDS.safe;
-  const suspiciousThreshold = config.suspicious_threshold || DEFAULT_THRESHOLDS.suspicious;
+  const safeThreshold = toNumber(config.safe_threshold, DEFAULT_THRESHOLDS.safe);
+  const suspiciousThreshold = toNumber(config.suspicious_threshold, DEFAULT_THRESHOLDS.suspicious);
 
   let status;
   if (trustScore >= safeThreshold) {
@@ -100,15 +170,13 @@ const computeTrustScore = async ({
     },
   };
 
-  // Cache trust score for real-time dashboard
-  await setTrustScore(streamId, result);
-
-  // Persist to database
-  await logTrustScore(streamId, result);
-
-  // Trigger alert if needed
-  if (status === 'alert') {
-    await triggerAlert(streamId, result);
+  // Only persist/cache for real stream evaluations.
+  if (streamId) {
+    await setTrustScore(streamId, result);
+    await logTrustScore(streamId, result);
+    if (status === 'alert') {
+      await triggerAlert(streamId, result);
+    }
   }
 
   return result;

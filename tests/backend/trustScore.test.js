@@ -10,8 +10,8 @@ describe('Trust Score Engine', () => {
     suspicious_threshold: { value: 50 },
   };
 
-  test('computes safe status when all scores are high', () => {
-    const result = computeTrustScore(
+  test('computes safe status when all scores are high', async () => {
+    const result = await computeTrustScore(
       { overall_score: 0.95 },
       { overall_score: 0.92 },
       { sync_score: 0.90 },
@@ -22,8 +22,8 @@ describe('Trust Score Engine', () => {
     expect(result.status).toBe('safe');
   });
 
-  test('computes alert status when video score is very low (deepfake detected)', () => {
-    const result = computeTrustScore(
+  test('computes alert status when video score is very low (deepfake detected)', async () => {
+    const result = await computeTrustScore(
       { overall_score: 0.10 },
       { overall_score: 0.85 },
       { sync_score: 0.80 },
@@ -34,8 +34,8 @@ describe('Trust Score Engine', () => {
     expect(['suspicious', 'alert']).toContain(result.status);
   });
 
-  test('computes alert status when all scores are zero', () => {
-    const result = computeTrustScore(
+  test('computes alert status when all scores are zero', async () => {
+    const result = await computeTrustScore(
       { overall_score: 0 },
       { overall_score: 0 },
       { sync_score: 0 },
@@ -46,8 +46,8 @@ describe('Trust Score Engine', () => {
     expect(result.status).toBe('alert');
   });
 
-  test('computes suspicious status in borderline range', () => {
-    const result = computeTrustScore(
+  test('computes suspicious status in borderline range', async () => {
+    const result = await computeTrustScore(
       { overall_score: 0.60 },
       { overall_score: 0.65 },
       { sync_score: 0.55 },
@@ -59,8 +59,8 @@ describe('Trust Score Engine', () => {
     expect(result.status).toBe('suspicious');
   });
 
-  test('scores are clamped to 0-100 range', () => {
-    const result = computeTrustScore(
+  test('scores are clamped to 0-100 range', async () => {
+    const result = await computeTrustScore(
       { overall_score: 2.0 },
       { overall_score: -0.5 },
       { sync_score: 1.5 },
@@ -71,8 +71,8 @@ describe('Trust Score Engine', () => {
     expect(result.trust_score).toBeLessThanOrEqual(100);
   });
 
-  test('weights sum correctly to produce expected score', () => {
-    const result = computeTrustScore(
+  test('weights sum correctly to produce expected score', async () => {
+    const result = await computeTrustScore(
       { overall_score: 1.0 },
       { overall_score: 1.0 },
       { sync_score: 1.0 },
@@ -82,8 +82,8 @@ describe('Trust Score Engine', () => {
     expect(result.trust_score).toBe(100);
   });
 
-  test('handles missing sub-scores gracefully', () => {
-    const result = computeTrustScore(
+  test('handles missing sub-scores gracefully', async () => {
+    const result = await computeTrustScore(
       null,
       null,
       null,

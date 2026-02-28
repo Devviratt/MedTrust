@@ -57,7 +57,7 @@ jobs:
         working-directory: backend
 
       - name: Run Jest tests
-        run: npm test -- --coverage --forceExit
+        run: npx jest --config ../tests/backend/jest.config.js --coverage --forceExit
         working-directory: backend
         env:
           NODE_ENV: test
@@ -95,7 +95,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsndfile1 ffmpeg libgl1-mesa-glx
+          sudo apt-get install -y libsndfile1 ffmpeg libgl1
 
       - name: Install Python dependencies
         run: |
@@ -116,7 +116,7 @@ jobs:
         working-directory: ai-services
 
       - name: Run PyTest
-        run: pytest tests/ -v --cov=. --cov-report=xml --tb=short
+        run: pytest ../tests/ai_services -v --cov=. --cov-report=xml --tb=short
         working-directory: ai-services
         env:
           PYTHONPATH: .

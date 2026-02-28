@@ -1,5 +1,5 @@
 const request = require('supertest');
-const app = require('../../backend/src/server');
+const { app } = require('../../backend/src/server');
 const { pool } = require('../../backend/src/config/database');
 
 describe('Auth - Doctor Login', () => {
