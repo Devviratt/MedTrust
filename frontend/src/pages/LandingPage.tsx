@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Shield, Brain, Link2, ArrowRight, ChevronRight,
-  Activity, Lock, CheckCircle, Monitor, Cpu, Database,
+  Activity, Lock, CheckCircle,
   AlertTriangle, BarChart3, Users, FlaskConical,
   GitBranch, Settings, Fingerprint, Eye, Sun, Moon,
   ChevronDown, Stethoscope,
@@ -36,12 +36,31 @@ const FEATURES = [
   { icon: Activity,    title: 'Real-Time Alerts',       description: 'Instant SMS and dashboard alerts when trust score drops or impersonation risk is detected. Configurable thresholds per deployment.', accent: '#DC2626', accentBg: 'rgba(220,38,38,0.08)' },
 ];
 
-const PIPELINE = [
-  { icon: Monitor,       label: 'ICU Feed',    sub: 'Live WebRTC stream' },
-  { icon: Cpu,           label: 'AI Analysis', sub: 'Video · Voice · Biometric' },
-  { icon: BarChart3,     label: 'Trust Score', sub: 'Zero-trust composite' },
-  { icon: AlertTriangle, label: 'Alerts',      sub: 'Real-time notifications' },
-  { icon: Database,      label: 'Blockchain',  sub: 'Immutable audit log' },
+const HOW_IT_WORKS = [
+  {
+    step: '01',
+    icon: Fingerprint,
+    title: 'Register & Enroll Biometrics',
+    desc: 'Doctors register with credentials and complete face + voice biometric enrollment. Patients create an account and select a verified doctor for their consultation.',
+    accent: '#2563EB',
+    accentBg: 'rgba(37,99,235,0.10)',
+  },
+  {
+    step: '02',
+    icon: Brain,
+    title: 'AI Verifies Both Parties',
+    desc: 'Before every session, the doctor completes a real-time identity re-verification. Multi-modal AI compares live face, voice, and biometric signals against the enrolled baseline.',
+    accent: '#7C3AED',
+    accentBg: 'rgba(124,58,237,0.10)',
+  },
+  {
+    step: '03',
+    icon: Shield,
+    title: 'Secure Session Starts',
+    desc: 'Once identity is confirmed, the session activates automatically. Trust scores are computed every frame and logged immutably to the blockchain audit trail.',
+    accent: '#059669',
+    accentBg: 'rgba(5,150,105,0.10)',
+  },
 ];
 
 const STATS = [
@@ -71,7 +90,7 @@ const LAB_FEATURES = [
 const CHAIN_FEATURES = [
   { icon: GitBranch,   title: 'Immutable Event Log',   desc: 'Every trust score, alert, and session boundary is hashed and chained. SHA-256 linked records cannot be altered retroactively.' },
   { icon: Lock,        title: 'Chain Integrity Check',  desc: 'One-click validation of any stream\'s audit chain. Returns block-by-block hash verification with tamper detection.' },
-  { icon: Database,    title: 'Full Audit Export',      desc: 'Admin-accessible audit export for all events across all streams. Filter by date range, severity, and event type.' },
+  { icon: GitBranch,   title: 'Full Audit Export',      desc: 'Admin-accessible audit export for all events across all streams. Filter by date range, severity, and event type.' },
   { icon: CheckCircle, title: 'HIPAA-Grade Trail',      desc: 'Every login, registration, threshold change, and impersonation event is recorded with actor ID, timestamp and severity level.' },
 ];
 
@@ -280,22 +299,62 @@ export const LandingPage: React.FC = () => {
         <div className="landing-container">
           <div className="landing-section-header">
             <h2 className="landing-h2">How it works</h2>
-            <p className="landing-section-sub">A fully automated pipeline from ICU stream to immutable blockchain record.</p>
+            <p className="landing-section-sub">Three steps from registration to a fully verified, real-time secure consultation.</p>
           </div>
-          <div className="landing-pipeline">
-            {PIPELINE.map((step, i) => (
-              <React.Fragment key={step.label}>
-                <div className="landing-pipeline-step">
-                  <div className="landing-pipeline-icon"><step.icon size={18} strokeWidth={1.75} /></div>
-                  <div className="landing-pipeline-label">{step.label}</div>
-                  <div className="landing-pipeline-sub">{step.sub}</div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gap: '1.5rem',
+            marginTop: '2.5rem',
+            position: 'relative',
+          }}>
+            {HOW_IT_WORKS.map((s, i) => (
+              <div key={s.step} style={{
+                background: 'var(--glass-bg)',
+                border: `1px solid ${s.accent}33`,
+                borderRadius: 20,
+                padding: '1.75rem 1.5rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1rem',
+                position: 'relative',
+                transition: 'box-shadow 0.2s ease, transform 0.2s ease',
+              }}
+                onMouseEnter={e => {
+                  (e.currentTarget as HTMLElement).style.boxShadow = `0 8px 32px ${s.accent}22`;
+                  (e.currentTarget as HTMLElement).style.transform = 'translateY(-3px)';
+                }}
+                onMouseLeave={e => {
+                  (e.currentTarget as HTMLElement).style.boxShadow = 'none';
+                  (e.currentTarget as HTMLElement).style.transform = 'none';
+                }}
+              >
+                {/* Step number */}
+                <div style={{
+                  position: 'absolute', top: '1.25rem', right: '1.25rem',
+                  fontSize: '2rem', fontWeight: 900, lineHeight: 1,
+                  color: `${s.accent}18`, fontFamily: 'monospace', userSelect: 'none',
+                }}>{s.step}</div>
+                {/* Icon */}
+                <div style={{
+                  width: 48, height: 48, borderRadius: 14,
+                  background: s.accentBg,
+                  border: `1.5px solid ${s.accent}40`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0,
+                }}>
+                  <s.icon size={22} strokeWidth={1.75} style={{ color: s.accent }} />
                 </div>
-                {i < PIPELINE.length - 1 && (
-                  <div className="landing-pipeline-arrow" aria-hidden="true">
-                    <ArrowRight size={16} strokeWidth={1.5} />
-                  </div>
+                {/* Step connector arrow (desktop) */}
+                {i < HOW_IT_WORKS.length - 1 && (
+                  <div style={{
+                    display: 'none',
+                  }} aria-hidden="true" />
                 )}
-              </React.Fragment>
+                <div style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: s.accent }}>Step {s.step}</div>
+                <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)', lineHeight: 1.3 }}>{s.title}</div>
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.65 }}>{s.desc}</div>
+              </div>
             ))}
           </div>
         </div>
@@ -416,34 +475,82 @@ export const LandingPage: React.FC = () => {
 
       {/* ── Footer ───────────────────────────────────────────────────────── */}
       <footer className="landing-footer">
-        <div className="landing-container" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <div className="landing-footer-inner">
-            <div className="landing-logo">
-              <div className="landing-logo-icon"><Shield size={14} strokeWidth={2} /></div>
-              <span className="landing-logo-text">MedTrust AI</span>
-              <span className="landing-footer-version">v1.0.0</span>
+        <div className="landing-container" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+
+          {/* Top grid: 4 columns */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '2rem',
+          }}>
+
+            {/* Col 1 — Brand */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div className="landing-logo">
+                <div className="landing-logo-icon"><Shield size={14} strokeWidth={2} /></div>
+                <span className="landing-logo-text">MedTrust AI</span>
+              </div>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.65, margin: 0 }}>
+                Zero-trust telemedicine security platform. Real-time AI identity verification for ICU consultations.
+              </p>
+              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', opacity: 0.6 }}>v1.0.0 · HIPAA Compliant</span>
             </div>
-            <div className="landing-footer-links">
-              {NAV_SECTIONS.map((s, i) => (
-                <React.Fragment key={s.id}>
-                  {i > 0 && <span className="landing-footer-divider" />}
-                  <button
-                    className="landing-footer-link"
-                    onClick={() => {
-                      const redirect = SECTION_REDIRECT[s.id];
-                      if (redirect) { goToLogin(redirect); } else { scrollTo(s.id); }
-                    }}
-                  >
-                    {s.label}
-                  </button>
-                </React.Fragment>
+
+            {/* Col 2 — Navigation */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Platform</div>
+              {NAV_SECTIONS.map(s => (
+                <button key={s.id} className="landing-footer-link" style={{ textAlign: 'left' }}
+                  onClick={() => {
+                    const redirect = SECTION_REDIRECT[s.id];
+                    if (redirect) { goToLogin(redirect); } else { scrollTo(s.id); }
+                  }}>
+                  {s.label}
+                </button>
               ))}
-              <span className="landing-footer-divider" />
-              <button className="landing-footer-link" onClick={() => goToLogin()}>Login</button>
+            </div>
+
+            {/* Col 3 — Legal */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Legal</div>
+              {[
+                { label: 'About Us',       href: '#about' },
+                { label: 'Privacy Policy', href: '#privacy' },
+                { label: 'Terms of Use',   href: '#terms' },
+                { label: 'HIPAA Notice',   href: '#hipaa' },
+              ].map(l => (
+                <button key={l.label} className="landing-footer-link" style={{ textAlign: 'left' }}
+                  onClick={() => scrollTo(l.href.replace('#', ''))}>
+                  {l.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Col 4 — Account + Contact */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Account</div>
+              <button className="landing-footer-link" style={{ textAlign: 'left' }} onClick={() => navigate('/login')}>Login</button>
+              <button className="landing-footer-link" style={{ textAlign: 'left' }} onClick={() => navigate('/register')}>Register as Patient</button>
+              <button className="landing-footer-link" style={{ textAlign: 'left' }} onClick={() => navigate('/register-doctor')}>Register as Doctor</button>
+              <div style={{ marginTop: '0.75rem', fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Contact</div>
+              <a href="mailto:support@medtrust.ai" style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textDecoration: 'none' }}
+                onMouseEnter={e => (e.currentTarget.style.color = 'var(--accent-blue)')}
+                onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}>
+                support@medtrust.ai
+              </a>
             </div>
           </div>
-          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1rem', display: 'flex', justifyContent: 'center' }}>
-            <span className="landing-footer-copy">© 2025 MedTrust AI. All rights reserved. &nbsp;·&nbsp; Zero-Trust ICU Security Platform</span>
+
+          {/* Bottom bar */}
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <span className="landing-footer-copy">© 2025 MedTrust AI. All rights reserved.</span>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'flex', gap: '1rem' }}>
+              <span>Zero-Trust ICU Security Platform</span>
+              <span>·</span>
+              <span>SOC 2 Ready</span>
+              <span>·</span>
+              <span>HIPAA Compliant</span>
+            </span>
           </div>
         </div>
       </footer>

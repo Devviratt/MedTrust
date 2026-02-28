@@ -18,24 +18,49 @@ import { DoctorsPage } from './pages/DoctorsPage';
 import { BlockchainPage } from './pages/BlockchainPage';
 import { DetectionLabPage } from './pages/DetectionLabPage';
 
-// ── Simple auth guard: checks localStorage token only, no auto-redirect on mount ──
+// ── Safe auth state reader (never throws) ─────────────────────────────────────
+const readAuth = (): { token: string | null; role: string | null } => {
+  try {
+    const raw = localStorage.getItem('medtrust-auth');
+    if (!raw) return { token: null, role: null };
+    const state = JSON.parse(raw)?.state ?? null;
+    const token = state?.token ?? null;
+    const role  = state?.user?.role ?? null;
+    // Basic expiry guard: JWT middle segment contains exp
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        if (payload?.exp && payload.exp * 1000 < Date.now()) {
+          localStorage.removeItem('medtrust-auth');
+          return { token: null, role: null };
+        }
+      } catch { /* non-standard token — leave it */ }
+    }
+    return { token, role };
+  } catch {
+    localStorage.removeItem('medtrust-auth');
+    return { token: null, role: null };
+  }
+};
+
+// ── Root route: show landing if guest, redirect to dashboard if logged in ─────
+const RootRoute: React.FC = () => {
+  const { token, role } = readAuth();
+  if (!token) return <LandingPage />;
+  if (role === 'admin')   return <Navigate to="/admin"            replace />;
+  if (role === 'doctor')  return <Navigate to="/doctor-dashboard" replace />;
+  if (role === 'patient') return <Navigate to="/patient-dashboard" replace />;
+  return <LandingPage />;
+};
+
+// ── Auth guard: checks token + role, clears expired tokens ───────────────────
 const RequireAuth: React.FC<{ children: React.ReactNode; roles?: string[] }> = ({ children, roles }) => {
   const location = useLocation();
-  const stored = (() => {
-    try {
-      const raw = localStorage.getItem('medtrust-auth');
-      if (!raw) return null;
-      return JSON.parse(raw)?.state ?? null;
-    } catch { return null; }
-  })();
-
-  const token    = stored?.token      ?? null;
-  const userRole = stored?.user?.role ?? null;
+  const { token, role: userRole } = readAuth();
 
   if (!token) return <Navigate to="/login" state={{ from: location }} replace />;
 
   if (roles && roles.length > 0 && userRole && !roles.includes(userRole)) {
-    // User is authenticated but wrong role — send them to their correct dashboard
     if (userRole === 'admin')   return <Navigate to="/admin"            replace />;
     if (userRole === 'patient') return <Navigate to="/patient-dashboard" replace />;
     return <Navigate to="/doctor-dashboard" replace />;
@@ -71,8 +96,8 @@ const App: React.FC = () => {
         }}
       />
       <Routes>
-        {/* ── Public — always accessible, no redirect ── */}
-        <Route path="/"              element={<LandingPage />} />
+        {/* ── Root: landing for guests, dashboard redirect for logged-in users ── */}
+        <Route path="/"              element={<RootRoute />} />
         <Route path="/login"         element={<LoginPage />} />
         <Route path="/register"      element={<RegisterPage />} />
         <Route path="/register-doctor" element={<RegisterDoctorPage />} />
