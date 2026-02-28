@@ -40,11 +40,19 @@ const authenticate = async (req, res, next) => {
     let user = await getCache(cacheKey);
 
     if (!user) {
-      // Check unified users table first (RBAC platform)
-      let result = await query(
-        'SELECT id, name, email, role, is_active, biometric_enrolled, enrollment_status FROM users WHERE id = $1',
-        [decoded.userId]
-      );
+      // Check unified users table first (RBAC platform). If the table is absent
+      // in legacy deployments, fall back to doctors table.
+      let result = { rows: [] };
+      try {
+        result = await query(
+          'SELECT id, name, email, role, is_active, biometric_enrolled, enrollment_status FROM users WHERE id = $1',
+          [decoded.userId]
+        );
+      } catch (err) {
+        if (!String(err.message || '').includes('relation "users" does not exist')) {
+          throw err;
+        }
+      }
 
       // Fall back to legacy doctors table
       if (result.rows.length === 0) {
