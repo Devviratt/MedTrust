@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package biometric;
+
+service BiometricService {
+    rpc SyncBiometrics (BiometricSyncRequest) returns (BiometricSyncResponse);
+    rpc ExtractRPPG (RPPGRequest) returns (RPPGResponse);
+}
+
+message BiometricSyncRequest {
+    string stream_id             = 1;
+    repeated float rppg_signal   = 2;
+    repeated float ecg_signal    = 3;
+    int32  sample_rate           = 4;
+    int64  timestamp             = 5;
+}
+
+message BiometricSyncResponse {
+    string stream_id         = 1;
+    float  sync_score        = 2;  // cross-correlation score [0-1]
+    float  correlation_coeff = 3;  // Pearson correlation
+    float  phase_offset_ms   = 4;
+    bool   physiological_ok  = 5;
+    string analysis          = 6;
+}
+
+message RPPGRequest {
+    string stream_id  = 1;
+    bytes  frame_data = 2;
+    int64  timestamp  = 3;
+}
+
+message RPPGResponse {
+    string         stream_id       = 1;
+    repeated float waveform        = 2;
+    float          heart_rate      = 3;
+    float          confidence      = 4;
+    string         method          = 5;  // ICA or PCA
+}

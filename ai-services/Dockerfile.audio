@@ -1,0 +1,40 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System dependencies — ARM64/trixie compatible
+# libsndfile1: required by soundfile/librosa; ffmpeg: audio decoding; libgomp1: OpenMP for numpy/scipy
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libsndfile1 \
+    ffmpeg \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+# Install torch from PyPI — PyPI has ARM64 (aarch64) wheels; the whl/cpu index is x86-only
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch==2.1.0 torchaudio==2.1.0 && \
+    pip install --no-cache-dir -r requirements.txt
+
+COPY proto/ ./proto/
+COPY audio_detection/ ./audio_detection/
+
+RUN mkdir -p proto_gen && \
+    python -m grpc_tools.protoc -I./proto \
+        --python_out=./proto_gen \
+        --grpc_python_out=./proto_gen \
+        proto/audio_detection.proto && \
+    touch proto_gen/__init__.py
+
+ENV AUDIO_SERVICE_PORT=50052
+ENV MODEL_CACHE_DIR=/models
+# proto_gen/ must be on PYTHONPATH so grpc stub's bare 'import audio_detection_pb2' resolves
+ENV PYTHONPATH=/app/proto_gen:/app
+
+EXPOSE 50052
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
+    CMD python -c "import grpc; ch=grpc.insecure_channel('localhost:50052'); grpc.channel_ready_future(ch).result(timeout=5)" || exit 1
+
+CMD ["python", "-m", "audio_detection.audio_service"]

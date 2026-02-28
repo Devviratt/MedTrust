@@ -1,0 +1,44 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System dependencies — ARM64/trixie compatible
+# libgl1-mesa-glx was renamed to libgl1 in Debian bookworm/trixie
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libgomp1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+# Install torch from PyPI — PyPI has ARM64 (aarch64) wheels; the whl/cpu index is x86-only
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch==2.1.0 torchvision==0.16.0 && \
+    pip install --no-cache-dir -r requirements.txt
+
+COPY proto/ ./proto/
+COPY video_detection/ ./video_detection/
+
+# Generate gRPC stubs into proto_gen package
+RUN mkdir -p proto_gen && \
+    python -m grpc_tools.protoc -I./proto \
+        --python_out=./proto_gen \
+        --grpc_python_out=./proto_gen \
+        proto/video_detection.proto && \
+    touch proto_gen/__init__.py
+
+ENV VIDEO_SERVICE_PORT=50051
+ENV MODEL_CACHE_DIR=/models
+# proto_gen/ must be on PYTHONPATH so grpc stub's bare 'import video_detection_pb2' resolves
+ENV PYTHONPATH=/app/proto_gen:/app
+
+EXPOSE 50051
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
+    CMD python -c "import grpc; ch=grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=5)" || exit 1
+
+CMD ["python", "-m", "video_detection.video_service"]

@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package videodetection;
+
+option go_package = "./videodetection";
+
+service VideoDetectionService {
+    rpc AnalyzeVideoChunk (VideoChunkRequest) returns (VideoAnalysisResponse);
+    rpc AnalyzeVideoStream (stream VideoChunkRequest) returns (stream VideoAnalysisResponse);
+    rpc GetModelInfo (ModelInfoRequest) returns (ModelInfoResponse);
+}
+
+message VideoChunkRequest {
+    string stream_id    = 1;
+    bytes  chunk_data   = 2;
+    int64  timestamp    = 3;
+    int32  frame_rate   = 4;
+    string doctor_id    = 5;
+}
+
+message VideoAnalysisResponse {
+    string  stream_id       = 1;
+    float   spatial_score   = 2;  // EfficientNet spatial authenticity [0-1]
+    float   temporal_score  = 3;  // LSTM temporal consistency [0-1]
+    float   gan_score       = 4;  // GAN artifact score [0-1]
+    float   rppg_score      = 5;  // rPPG physiological score [0-1]
+    repeated float rppg_waveform = 6;  // raw rPPG signal points
+    repeated FaceLandmark landmarks = 7;
+    int64   processing_ms   = 8;
+    string  model_version   = 9;
+    map<string, float> debug_scores = 10;
+}
+
+message FaceLandmark {
+    float x = 1;
+    float y = 2;
+    float z = 3;
+    int32 index = 4;
+}
+
+message ModelInfoRequest {}
+
+message ModelInfoResponse {
+    string version = 1;
+    string efficientnet_version = 2;
+    string lstm_version = 3;
+    bool   gpu_enabled = 4;
+}
