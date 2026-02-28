@@ -17,6 +17,8 @@ const { query }  = require('../config/database');
 const { getCache, setCache } = require('../config/redis');
 const { logger } = require('../middleware/errorHandler');
 const { getThresholds } = require('./thresholdService');
+const { analyzeVoiceAntiSpoof } = require('./voiceAntiSpoof');
+const { analyzeLiveness } = require('./livenessHardener');
 
 // ── Hash helpers ──────────────────────────────────────────────────────────────
 
@@ -143,11 +145,58 @@ const analyzeImpersonation = async ({ doctorId, streamId, lumaBuffer, mfccFeatur
     const faceSim  = baseline.face_hash  && currentFaceHash
       ? hammingSimilarity(baseline.face_hash, currentFaceHash)
       : 1.0;
-    const voiceSim = baseline.voice_hash && currentVoiceHash
+    const rawVoiceSim = baseline.voice_hash && currentVoiceHash
       ? hammingSimilarity(baseline.voice_hash, currentVoiceHash)
       : 1.0;
 
-    const overallSim  = (faceSim * 0.6) + (voiceSim * 0.4);
+    // ── Phase 2: Enhanced voice anti-spoofing — merge into voiceSim ───────────
+    // Run async, safe-failure: on any error voiceSim stays as rawVoiceSim.
+    let voiceSim = rawVoiceSim;
+    try {
+      if (Array.isArray(mfccFeatures) && mfccFeatures.length >= 4) {
+        const voiceResult = await analyzeVoiceAntiSpoof({ streamId, mfcc: mfccFeatures })
+          .catch(() => null);
+        if (voiceResult && typeof voiceResult.deepfakeVoiceScore === 'number') {
+          // deepfakeVoiceScore is 0–100; normalise to 0–1 for blending
+          const deepfakeVoiceNorm = voiceResult.deepfakeVoiceScore / 100;
+          // Weighted blend: 65% hash similarity + 35% anti-spoof signal
+          // Anti-spoof can only suppress (never inflate) the voice similarity
+          const blended = rawVoiceSim * 0.65 + deepfakeVoiceNorm * 0.35;
+          voiceSim = Math.min(rawVoiceSim, Math.max(0, blended));
+        }
+      }
+    } catch (_vsErr) {
+      voiceSim = rawVoiceSim; // safe failure
+    }
+
+    // ── Phase 3/4: Liveness + temporal consistency — modulate faceSim ─────────
+    // Run async, safe-failure: faceSim unchanged on error.
+    let effectiveFaceSim = faceSim;
+    try {
+      if (lumaBuffer && lumaBuffer.length > 0) {
+        const livenessResult = await analyzeLiveness({
+          streamId,
+          luma:         lumaBuffer,
+          brightness:   0,   // will be computed from luma in livenessHardener
+          edgeVariance: 0,
+        }).catch(() => null);
+        if (livenessResult) {
+          // If identity shift detected → hard suppress faceSim
+          if (livenessResult.identity_shift_detected) {
+            effectiveFaceSim = Math.min(effectiveFaceSim, 0.40);
+            logger.warn('[impersonation] temporal identity shift — faceSim suppressed', { doctorId, streamId });
+          } else if (livenessResult.livenessScore < 40) {
+            // Low liveness → moderate suppression
+            const livenessFactor = livenessResult.livenessScore / 100;
+            effectiveFaceSim = effectiveFaceSim * 0.70 + (effectiveFaceSim * livenessFactor * 0.30);
+          }
+        }
+      }
+    } catch (_lvErr) {
+      effectiveFaceSim = faceSim; // safe failure
+    }
+
+    const overallSim  = (effectiveFaceSim * 0.6) + (voiceSim * 0.4);
     const simScore    = Math.round(overallSim * 100);
 
     const risk =
@@ -159,14 +208,19 @@ const analyzeImpersonation = async ({ doctorId, streamId, lumaBuffer, mfccFeatur
       await query(
         `INSERT INTO audit_events (stream_id, event_type, severity, details)
          VALUES ($1,'IMPERSONATION_DETECTED','critical',$2)`,
-        [streamId, JSON.stringify({ similarity: overallSim, face_sim: faceSim, voice_sim: voiceSim })]
+        [streamId, JSON.stringify({
+          similarity:   overallSim,
+          face_sim:     effectiveFaceSim,
+          voice_sim:    voiceSim,
+          raw_voice_sim: rawVoiceSim,
+        })]
       ).catch(() => {});
     }
 
     const result = {
       impersonation_risk:    risk,
       similarity_score:      simScore,
-      face_similarity:       Math.round(faceSim * 100),
+      face_similarity:       Math.round(effectiveFaceSim * 100),
       voice_similarity:      Math.round(voiceSim * 100),
       baseline_established:  true,
     };

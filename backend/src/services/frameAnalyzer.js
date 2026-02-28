@@ -18,6 +18,7 @@
 
 const { getCache, setCache } = require('../config/redis');
 const { logger } = require('../middleware/errorHandler');
+const { analyzeFaceDeepfake } = require('./deepfakeAnalyzer');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal pure-JS JPEG luma extractor
@@ -283,6 +284,44 @@ const analyzeFrame = async (streamId, base64Jpeg) => {
     env_score = 65;
   }
 
+  // ── Phase 1: Enhanced deepfake face analysis — merge into video_score ────────
+  // Run async, non-blocking, timeout-safe (3s max inside analyzeFaceDeepfake).
+  // On any failure: video_score passes through unchanged (safe-failure guarantee).
+  let finalVideoScore = video_score;
+  try {
+    const deepfakeResult = await analyzeFaceDeepfake({
+      streamId,
+      luma,
+      width,
+      height,
+    });
+
+    const deepfakeFaceScore = deepfakeResult.deepfakeFaceScore; // 0–100
+
+    // Weighted blend: 65% existing signal + 35% deepfake detector
+    // This means a GAN score of 0 can suppress video_score by up to 35 points
+    // but cannot increase it (clamp at existing score ceiling)
+    const blended = Math.round(video_score * 0.65 + deepfakeFaceScore * 0.35);
+    finalVideoScore = Math.max(0, Math.min(video_score, blended)); // never inflate
+    finalVideoScore = Math.max(0, Math.min(100, finalVideoScore));
+
+    // Log only when deepfake detection meaningfully adjusts the score (>5 point delta)
+    if (Math.abs(video_score - finalVideoScore) > 5) {
+      logger.warn('[frameAnalyzer] deepfake face signal adjusted video_score', {
+        streamId,
+        original:        video_score,
+        adjusted:        finalVideoScore,
+        deepfakeFaceScore,
+        risk_level:      deepfakeResult.confidence,
+        gan_score:       deepfakeResult.detail?.gan_score,
+        micro_expr_delta: deepfakeResult.detail?.micro_expr_delta,
+      });
+    }
+  } catch (_dfErr) {
+    // Safe failure: keep original video_score
+    finalVideoScore = video_score;
+  }
+
   // Persist current metrics for next-frame delta
   await setCache(cacheKey, {
     brightness, stddev, edge_variance: edgeVariance,
@@ -290,7 +329,7 @@ const analyzeFrame = async (streamId, base64Jpeg) => {
   }, 60);
 
   return {
-    video_score,
+    video_score:         finalVideoScore,
     behavioral_score,
     env_score,
     brightness:          Math.round(brightness    * 10) / 10,

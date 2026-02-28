@@ -736,17 +736,100 @@ router.post('/sessions/:streamId/verify', authenticate, requireEnrolled, require
       biometric_score = 0,
       liveness_score  = 0,
       motion_score    = 0,
+      // Optional raw frame data for enhanced deepfake detection (Phase 1–5)
+      face_frame,
+      mfcc,
+      brightness,
+      edge_variance,
+      frame_width,
+      frame_height,
     } = req.body;
 
+    // ── Phase 1–7: Enhanced deepfake detection (async, timeout-safe, non-blocking) ──
+    // Runs in parallel with existing score validation.
+    // On any failure: returns original scores unchanged (safe failure mode).
+    let effectiveFaceScore  = face_score;
+    let effectiveVoiceScore = voice_score;
+    let deepfakeKillSwitch  = false;
+
+    try {
+      const { runEnhancedDetection } = require('../services/deepfakeFusion');
+      const { logger: _logger } = require('../middleware/errorHandler');
+
+      // Build luma buffer from face_frame if provided (reuse frameAnalyzer logic)
+      let lumaBuffer = null;
+      let frameW = frame_width  || 320;
+      let frameH = frame_height || 240;
+
+      if (face_frame && typeof face_frame === 'string' && face_frame.length > 100) {
+        try {
+          const { analyzeFrame } = require('../services/frameAnalyzer');
+          const frameResult = await analyzeFrame(req.params.streamId, face_frame).catch(() => null);
+          if (frameResult) {
+            // Reconstruct a Float32Array luma proxy from the buffer (same approach as frameAnalyzer)
+            const buf = Buffer.from(face_frame, 'base64');
+            const slice = buf.slice(2, Math.min(buf.length, 8192));
+            lumaBuffer = new Float32Array(Math.ceil(slice.length / 64));
+            for (let _i = 0; _i < lumaBuffer.length; _i++) {
+              let _s = 0;
+              for (let _j = _i * 64; _j < Math.min((_i + 1) * 64, slice.length); _j++) _s += slice[_j];
+              lumaBuffer[_i] = _s / 64;
+            }
+            frameW = frameResult.width  || 320;
+            frameH = frameResult.height || 240;
+          }
+        } catch (_fe) {
+          _logger.warn('[verify] frame decode failed for deepfake check', { error: _fe.message });
+        }
+      }
+
+      // Fall back to minimal luma if frame not provided (mfcc-only detection still runs)
+      if (!lumaBuffer) {
+        lumaBuffer = new Float32Array(64).fill(128);
+      }
+
+      const enhanced = await runEnhancedDetection({
+        streamId:         req.params.streamId,
+        doctorId:         req.user.id,
+        luma:             lumaBuffer,
+        width:            frameW,
+        height:           frameH,
+        brightness:       typeof brightness   === 'number' ? brightness   : 128,
+        edgeVariance:     typeof edge_variance === 'number' ? edge_variance : 0,
+        mfcc:             Array.isArray(mfcc) ? mfcc : null,
+        currentFaceScore:  face_score,
+        currentVoiceScore: voice_score,
+      });
+
+      effectiveFaceScore  = enhanced.adjustedFaceScore;
+      effectiveVoiceScore = enhanced.adjustedVoiceScore;
+      deepfakeKillSwitch  = enhanced.killSwitch;
+
+      _logger.info('[verify] enhanced deepfake check complete', {
+        streamId:       req.params.streamId,
+        riskLevel:      enhanced.detail?.risk_level,
+        failedSignals:  enhanced.failedSignals,
+        killSwitch:     enhanced.killSwitch,
+        faceDelta:      face_score - effectiveFaceScore,
+        voiceDelta:     voice_score - effectiveVoiceScore,
+      });
+    } catch (_enhErr) {
+      // Phase 7 safe failure: use original scores if enhanced detection itself fails
+      effectiveFaceScore  = face_score;
+      effectiveVoiceScore = voice_score;
+    }
+
     // Trust formula: face 30% + voice 20% + biometric 20% + liveness 15% + motion 15%
+    // Uses enhanced (adjusted) face and voice scores internally — formula unchanged
     const final_trust = Math.round(
-      face_score * 0.30 +
-      voice_score * 0.20 +
-      biometric_score * 0.20 +
-      liveness_score * 0.15 +
-      motion_score * 0.15
+      effectiveFaceScore  * 0.30 +
+      effectiveVoiceScore * 0.20 +
+      biometric_score     * 0.20 +
+      liveness_score      * 0.15 +
+      motion_score        * 0.15
     );
-    const passed = final_trust >= 70;
+    // Kill-switch forces failure regardless of numeric score
+    const passed = !deepfakeKillSwitch && final_trust >= 70;
 
     // Log verification attempt
     await dbQuery(
