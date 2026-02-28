@@ -119,7 +119,7 @@ jobs:
         run: pytest ../tests/ai_services -v --cov=. --cov-report=xml --tb=short
         working-directory: ai-services
         env:
-          PYTHONPATH: .
+          PYTHONPATH: .:./proto_gen
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
