@@ -51,15 +51,30 @@ const initSignalingServer = (httpServer) => {
       if (!rooms.has(streamId)) {
         rooms.set(streamId, new Set());
       }
+
+      // Collect existing members BEFORE adding self — send them back to the joiner
+      // so the joiner knows who to send a WebRTC offer to immediately
+      const existingMembers = Array.from(rooms.get(streamId)).map(sid => ({
+        socketId: sid,
+      }));
+
       rooms.get(streamId).add(socket.id);
 
+      // Tell the joiner about everyone already in the room
+      socket.emit('room-members', {
+        streamId,
+        members: existingMembers,
+        yourSocketId: socket.id,
+      });
+
+      // Tell everyone already in the room about the new peer
       socket.to(streamId).emit('peer-joined', {
         socketId: socket.id,
         userId: socket.user.userId,
         role,
       });
 
-      logger.info('User joined stream', { streamId, userId: socket.user.userId, role });
+      logger.info('User joined stream', { streamId, userId: socket.user.userId, role, existingCount: existingMembers.length });
     });
 
     socket.on('leave-stream', ({ streamId }) => {

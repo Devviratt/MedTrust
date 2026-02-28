@@ -1,7 +1,4 @@
 # MedTrust
-
-
-
 <div align="center">
 
 # MedTrust AI

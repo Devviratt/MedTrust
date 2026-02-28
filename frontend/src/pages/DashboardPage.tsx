@@ -74,96 +74,262 @@ const DetailRow: React.FC<{ label: string; value?: string | number | null }> = (
 );
 
 // ── WebRTC hook ────────────────────────────────────────────────────────────────
-function useWebRTC(streamId: string | null, socket: any) {
+function useWebRTC(streamId: string | null, connect: () => any) {
   const localRef  = useRef<HTMLVideoElement>(null);
   const remoteRef = useRef<HTMLVideoElement>(null);
   const pcRef     = useRef<RTCPeerConnection | null>(null);
+  // Track the remote peer's socketId so ICE candidates are routed correctly
+  const peerSocketIdRef = useRef<string | null>(null);
+  const retryTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const localStreamRef  = useRef<MediaStream | null>(null);
 
-  const [localStream,  setLocalStream]  = useState<MediaStream | null>(null);
-  const [hasRemote,    setHasRemote]    = useState(false);
-  const [micMuted,     setMicMuted]     = useState(false);
-  const [camOff,       setCamOff]       = useState(false);
+  const [localStream,    setLocalStream]    = useState<MediaStream | null>(null);
+  const [hasRemote,      setHasRemote]      = useState(false);
+  const [connState,      setConnState]      = useState<string>('new');
+  const [peerDisconnected, setPeerDisconnected] = useState(false);
+  const [micMuted,       setMicMuted]       = useState(false);
+  const [camOff,         setCamOff]         = useState(false);
+
+  // Always get the live socket instance — avoids stale-ref issue
+  const getSocket = useCallback(() => (window as any).__medtrustSocket ?? null, []);
 
   const startMedia = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
       setLocalStream(stream);
-      if (localRef.current) localRef.current.srcObject = stream;
-    } catch {
-      toast.error('Camera / microphone access denied — check browser permissions.');
+      if (localRef.current) {
+        localRef.current.srcObject = stream;
+        localRef.current.muted     = true;
+        localRef.current.playsInline = true;
+        localRef.current.autoplay    = true;
+        localRef.current.play().catch(() => {});
+      }
+      return stream;
+    } catch (err: any) {
+      toast.error(
+        err.name === 'NotAllowedError'
+          ? 'Camera/microphone permission denied — check browser settings.'
+          : `Media error: ${err.message}`
+      );
+      return null;
     }
   }, []);
 
-  const getPC = useCallback((): RTCPeerConnection => {
-    if (pcRef.current) return pcRef.current;
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  // Build (or reuse) RTCPeerConnection — always creates fresh on first call
+  const getPC = useCallback((stream?: MediaStream): RTCPeerConnection => {
+    if (pcRef.current && pcRef.current.signalingState !== 'closed') return pcRef.current;
+
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ],
+    });
+
+    // Attach local tracks immediately if stream is available
+    const s = stream ?? localStreamRef.current;
+    if (s) {
+      s.getTracks().forEach(t => pc.addTrack(t, s));
+    }
+
+    // Remote stream → attach to video element
     pc.ontrack = (e) => {
       setHasRemote(true);
-      if (remoteRef.current) remoteRef.current.srcObject = e.streams[0];
-    };
-    pc.onicecandidate = (e) => {
-      if (e.candidate && socket && streamId) {
-        socket.emit('ice-candidate', { streamId, candidate: e.candidate });
+      setPeerDisconnected(false);
+      if (remoteRef.current) {
+        remoteRef.current.srcObject = e.streams[0];
+        remoteRef.current.playsInline = true;
+        remoteRef.current.autoplay    = true;
+        remoteRef.current.play().catch(() => {});
       }
     };
+
+    // ICE: route to the specific peer socketId
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) return;
+      const sock = getSocket();
+      if (sock && streamId && peerSocketIdRef.current) {
+        sock.emit('ice-candidate', {
+          targetSocketId: peerSocketIdRef.current,
+          candidate: e.candidate,
+          streamId,
+        });
+      }
+    };
+
+    // Connection state tracking + 10s retry on failure
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState;
+      setConnState(state);
+      if (state === 'connected') {
+        if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+        setPeerDisconnected(false);
+      }
+      if (state === 'failed') {
+        toast.error('WebRTC connection failed — retrying…');
+        retryTimerRef.current = setTimeout(() => {
+          // Close broken PC and let peer-joined / room-members trigger a fresh offer
+          pcRef.current?.close();
+          pcRef.current = null;
+          const sock = getSocket();
+          if (sock && streamId) {
+            sock.emit('leave-stream',  { streamId });
+            sock.emit('join-stream',   { streamId, role: 'doctor' });
+            sock.emit('subscribe-trust', { streamId });
+          }
+        }, 2000);
+      }
+      if (state === 'disconnected') {
+        // Give 10s for ICE restart before treating as failed
+        retryTimerRef.current = setTimeout(() => {
+          if (pcRef.current?.connectionState === 'disconnected') {
+            pcRef.current.close();
+            pcRef.current = null;
+          }
+        }, 10000);
+      }
+    };
+
     pcRef.current = pc;
     return pc;
-  }, [socket, streamId]);
+  }, [streamId, getSocket]);
 
-  // Add local tracks whenever stream or PC is ready
+  // Add local tracks when stream arrives after PC was already created
   useEffect(() => {
     if (!localStream || !pcRef.current) return;
     const pc = pcRef.current;
-    const existing = pc.getSenders().map(s => s.track?.id);
+    if (pc.signalingState === 'closed') return;
+    const existingIds = pc.getSenders().map(s => s.track?.id);
     localStream.getTracks().forEach(t => {
-      if (!existing.includes(t.id)) pc.addTrack(t, localStream);
+      if (!existingIds.includes(t.id)) pc.addTrack(t, localStream);
     });
   }, [localStream]);
 
-  // Socket signaling
+  // Send offer to a specific peer
+  const sendOffer = useCallback(async (targetSocketId: string) => {
+    if (!streamId) return;
+    const sock = getSocket();
+    if (!sock) return;
+    peerSocketIdRef.current = targetSocketId;
+    const pc = getPC();
+    try {
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+      await pc.setLocalDescription(offer);
+      sock.emit('webrtc-offer', { targetSocketId, offer, streamId });
+    } catch (err: any) {
+      toast.error(`Offer failed: ${err.message}`);
+    }
+  }, [streamId, getPC, getSocket]);
+
+  // Socket signaling events
   useEffect(() => {
-    if (!socket || !streamId) return;
+    if (!streamId) return;
+
+    const handleRoomMembers = ({ members }: { members: { socketId: string }[]; yourSocketId: string }) => {
+      // I joined into an existing room — existing members are already there
+      // As the new peer I initiate the offer to each existing member
+      members.forEach(m => sendOffer(m.socketId));
+    };
+
+    const handlePeerJoined = ({ socketId }: { socketId: string }) => {
+      // Someone joined after me — they will send me an offer; just note their ID
+      peerSocketIdRef.current = socketId;
+      setPeerDisconnected(false);
+    };
+
     const handleOffer = async ({ offer, fromSocketId }: any) => {
+      peerSocketIdRef.current = fromSocketId;
+      const sock = getSocket();
+      if (!sock) return;
       const pc = getPC();
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socket.emit('webrtc-answer', { targetSocketId: fromSocketId, answer, streamId });
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sock.emit('webrtc-answer', { targetSocketId: fromSocketId, answer, streamId });
+      } catch (err: any) {
+        toast.error(`Answer failed: ${err.message}`);
+      }
     };
+
     const handleAnswer = async ({ answer }: any) => {
-      try { await pcRef.current?.setRemoteDescription(new RTCSessionDescription(answer)); } catch { /* ignore */ }
+      try {
+        if (pcRef.current && pcRef.current.signalingState !== 'closed') {
+          await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+      } catch { /* ignore — can race with reconnect */ }
     };
+
     const handleIce = async ({ candidate }: any) => {
-      try { await pcRef.current?.addIceCandidate(new RTCIceCandidate(candidate)); } catch { /* ignore */ }
+      try {
+        if (pcRef.current && pcRef.current.signalingState !== 'closed' && candidate) {
+          await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      } catch { /* ignore stale candidates */ }
     };
-    socket.on('webrtc-offer',   handleOffer);
-    socket.on('webrtc-answer',  handleAnswer);
-    socket.on('ice-candidate',  handleIce);
+
+    const handlePeerLeft = () => {
+      setHasRemote(false);
+      setPeerDisconnected(true);
+      peerSocketIdRef.current = null;
+      // Reset PC so it's ready for the peer to reconnect
+      pcRef.current?.close();
+      pcRef.current = null;
+      if (remoteRef.current) remoteRef.current.srcObject = null;
+    };
+
+    const sock = getSocket();
+    if (!sock) return;
+
+    sock.on('room-members',  handleRoomMembers);
+    sock.on('peer-joined',   handlePeerJoined);
+    sock.on('webrtc-offer',  handleOffer);
+    sock.on('webrtc-answer', handleAnswer);
+    sock.on('ice-candidate', handleIce);
+    sock.on('peer-left',     handlePeerLeft);
+
     return () => {
-      socket.off('webrtc-offer',  handleOffer);
-      socket.off('webrtc-answer', handleAnswer);
-      socket.off('ice-candidate', handleIce);
+      sock.off('room-members',  handleRoomMembers);
+      sock.off('peer-joined',   handlePeerJoined);
+      sock.off('webrtc-offer',  handleOffer);
+      sock.off('webrtc-answer', handleAnswer);
+      sock.off('ice-candidate', handleIce);
+      sock.off('peer-left',     handlePeerLeft);
     };
-  }, [socket, streamId, getPC]);
+  }, [streamId, getPC, getSocket, sendOffer]);
 
   const stopAll = useCallback(() => {
-    localStream?.getTracks().forEach(t => t.stop());
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    localStreamRef.current?.getTracks().forEach(t => t.stop());
     pcRef.current?.close();
     pcRef.current = null;
+    peerSocketIdRef.current = null;
+    localStreamRef.current = null;
     setLocalStream(null);
     setHasRemote(false);
-  }, [localStream]);
+    setConnState('closed');
+    // Emit leave-room on cleanup
+    const sock = getSocket();
+    if (sock && streamId) sock.emit('leave-stream', { streamId });
+  }, [streamId, getSocket]);
 
   const toggleMic = () => {
-    localStream?.getAudioTracks().forEach(t => { t.enabled = !t.enabled; });
+    localStreamRef.current?.getAudioTracks().forEach(t => { t.enabled = !t.enabled; });
     setMicMuted(m => !m);
   };
   const toggleCam = () => {
-    localStream?.getVideoTracks().forEach(t => { t.enabled = !t.enabled; });
+    localStreamRef.current?.getVideoTracks().forEach(t => { t.enabled = !t.enabled; });
     setCamOff(c => !c);
   };
 
-  return { localRef, remoteRef, hasRemote, micMuted, camOff, startMedia, stopAll, toggleMic, toggleCam };
+  return {
+    localRef, remoteRef,
+    hasRemote, connState, peerDisconnected,
+    micMuted, camOff,
+    startMedia, stopAll, toggleMic, toggleCam,
+    getPC,
+  };
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────────
@@ -171,7 +337,7 @@ export const DashboardPage: React.FC = () => {
   const { streamId } = useParams<{ streamId: string }>();
   const navigate     = useNavigate();
   const { user }     = useAuthStore();
-  const { connect, joinStream, socket } = useSocket();
+  const { connect, joinStream } = useSocket();
 
   const [session,      setSession]      = useState<any>(null);
   const [patientTrust, setPatientTrust] = useState<any>(null);
@@ -181,8 +347,12 @@ export const DashboardPage: React.FC = () => {
   const [ending,       setEnding]       = useState(false);
   const [blocked,      setBlocked]      = useState<string | null>(null);
 
-  const { localRef, remoteRef, hasRemote, micMuted, camOff, startMedia, stopAll, toggleMic, toggleCam } =
-    useWebRTC(streamId ?? null, socket);
+  const {
+    localRef, remoteRef,
+    hasRemote, connState, peerDisconnected,
+    micMuted, camOff,
+    startMedia, stopAll, toggleMic, toggleCam,
+  } = useWebRTC(streamId ?? null, connect);
 
   // ── Load session detail ──────────────────────────────────────────────────────
   const loadSession = useCallback(async () => {
@@ -388,7 +558,7 @@ export const DashboardPage: React.FC = () => {
                 style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
               />
 
-              {/* Placeholder: waiting for patient */}
+              {/* Placeholder: waiting / peer disconnected / connecting */}
               {!hasRemote && (
                 <div style={{
                   position: 'absolute', inset: 0,
@@ -401,11 +571,28 @@ export const DashboardPage: React.FC = () => {
                     border: '2px solid rgba(255,255,255,0.1)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
-                    <User size={30} style={{ color: 'rgba(255,255,255,0.25)' }} />
+                    {connState === 'connecting' || connState === 'checking'
+                      ? <Loader2 size={30} style={{ color: 'rgba(255,255,255,0.5)', animation: 'spin 0.8s linear infinite' }} />
+                      : <User size={30} style={{ color: 'rgba(255,255,255,0.25)' }} />}
                   </div>
-                  <p style={{ margin: 0, fontSize: '0.82rem', color: 'rgba(255,255,255,0.3)', fontWeight: 500 }}>
-                    Waiting for patient to connect…
+                  <p style={{ margin: 0, fontSize: '0.82rem', fontWeight: 500,
+                    color: peerDisconnected ? 'rgba(239,68,68,0.7)' : 'rgba(255,255,255,0.3)' }}>
+                    {peerDisconnected
+                      ? 'Patient disconnected'
+                      : connState === 'connecting' || connState === 'checking'
+                        ? 'Establishing connection…'
+                        : connState === 'failed'
+                          ? 'Connection failed — retrying…'
+                          : 'Waiting for patient to connect…'}
                   </p>
+                  {connState !== 'new' && connState !== 'closed' && !peerDisconnected && (
+                    <span style={{
+                      fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)',
+                      fontFamily: 'monospace', letterSpacing: '0.06em',
+                    }}>
+                      ICE: {connState}
+                    </span>
+                  )}
                 </div>
               )}
 

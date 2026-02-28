@@ -10,7 +10,246 @@ import {
   Building, Loader2, RefreshCw, UserCircle,
   Stethoscope, ArrowRight, XCircle, Wifi, WifiOff,
   Award, Hash, Calendar, TrendingUp,
+  Mic, MicOff, Video, VideoOff, PhoneOff, User,
 } from 'lucide-react';
+
+// ── Patient WebRTC hook ────────────────────────────────────────────────────────
+function usePatientWebRTC(streamId: string | null) {
+  const localRef  = useRef<HTMLVideoElement>(null);
+  const remoteRef = useRef<HTMLVideoElement>(null);
+  const pcRef     = useRef<RTCPeerConnection | null>(null);
+  const peerSocketIdRef = useRef<string | null>(null);
+  const retryTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const localStreamRef  = useRef<MediaStream | null>(null);
+
+  const [localStream,      setLocalStream]      = useState<MediaStream | null>(null);
+  const [hasRemote,        setHasRemote]        = useState(false);
+  const [connState,        setConnState]        = useState<string>('new');
+  const [peerDisconnected, setPeerDisconnected] = useState(false);
+  const [micMuted,         setMicMuted]         = useState(false);
+  const [camOff,           setCamOff]           = useState(false);
+  const [mediaReady,       setMediaReady]       = useState(false);
+
+  const getSocket = useCallback(() => (window as any).__medtrustSocket ?? null, []);
+
+  const startMedia = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+      setMediaReady(true);
+      if (localRef.current) {
+        localRef.current.srcObject   = stream;
+        localRef.current.muted       = true;
+        localRef.current.playsInline = true;
+        localRef.current.autoplay    = true;
+        localRef.current.play().catch(() => {});
+      }
+      return stream;
+    } catch (err: any) {
+      toast.error(
+        err.name === 'NotAllowedError'
+          ? 'Camera/microphone permission denied — check browser settings.'
+          : `Media error: ${err.message}`
+      );
+      return null;
+    }
+  }, []);
+
+  const getPC = useCallback((stream?: MediaStream): RTCPeerConnection => {
+    if (pcRef.current && pcRef.current.signalingState !== 'closed') return pcRef.current;
+
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ],
+    });
+
+    const s = stream ?? localStreamRef.current;
+    if (s) s.getTracks().forEach(t => pc.addTrack(t, s));
+
+    pc.ontrack = (e) => {
+      setHasRemote(true);
+      setPeerDisconnected(false);
+      if (remoteRef.current) {
+        remoteRef.current.srcObject   = e.streams[0];
+        remoteRef.current.playsInline = true;
+        remoteRef.current.autoplay    = true;
+        remoteRef.current.play().catch(() => {});
+      }
+    };
+
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) return;
+      const sock = getSocket();
+      if (sock && streamId && peerSocketIdRef.current) {
+        sock.emit('ice-candidate', {
+          targetSocketId: peerSocketIdRef.current,
+          candidate: e.candidate,
+          streamId,
+        });
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState;
+      setConnState(state);
+      if (state === 'connected') {
+        if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+        setPeerDisconnected(false);
+      }
+      if (state === 'failed') {
+        retryTimerRef.current = setTimeout(() => {
+          pcRef.current?.close();
+          pcRef.current = null;
+          const sock = getSocket();
+          if (sock && streamId) {
+            sock.emit('leave-stream', { streamId });
+            sock.emit('join-stream',  { streamId, role: 'patient' });
+            sock.emit('subscribe-trust', { streamId });
+          }
+        }, 2000);
+      }
+      if (state === 'disconnected') {
+        retryTimerRef.current = setTimeout(() => {
+          if (pcRef.current?.connectionState === 'disconnected') {
+            pcRef.current.close();
+            pcRef.current = null;
+          }
+        }, 10000);
+      }
+    };
+
+    pcRef.current = pc;
+    return pc;
+  }, [streamId, getSocket]);
+
+  // Add tracks when stream arrives after PC created
+  useEffect(() => {
+    if (!localStream || !pcRef.current) return;
+    const pc = pcRef.current;
+    if (pc.signalingState === 'closed') return;
+    const existingIds = pc.getSenders().map(s => s.track?.id);
+    localStream.getTracks().forEach(t => {
+      if (!existingIds.includes(t.id)) pc.addTrack(t, localStream);
+    });
+  }, [localStream]);
+
+  const sendOffer = useCallback(async (targetSocketId: string) => {
+    if (!streamId) return;
+    const sock = getSocket();
+    if (!sock) return;
+    peerSocketIdRef.current = targetSocketId;
+    const pc = getPC();
+    try {
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+      await pc.setLocalDescription(offer);
+      sock.emit('webrtc-offer', { targetSocketId, offer, streamId });
+    } catch (err: any) {
+      toast.error(`Offer failed: ${err.message}`);
+    }
+  }, [streamId, getPC, getSocket]);
+
+  // Socket signaling
+  useEffect(() => {
+    if (!streamId) return;
+
+    const handleRoomMembers = ({ members }: { members: { socketId: string }[] }) => {
+      members.forEach(m => sendOffer(m.socketId));
+    };
+    const handlePeerJoined = ({ socketId }: { socketId: string }) => {
+      peerSocketIdRef.current = socketId;
+      setPeerDisconnected(false);
+    };
+    const handleOffer = async ({ offer, fromSocketId }: any) => {
+      peerSocketIdRef.current = fromSocketId;
+      const sock = getSocket();
+      if (!sock) return;
+      const pc = getPC();
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sock.emit('webrtc-answer', { targetSocketId: fromSocketId, answer, streamId });
+      } catch (err: any) {
+        toast.error(`Answer failed: ${err.message}`);
+      }
+    };
+    const handleAnswer = async ({ answer }: any) => {
+      try {
+        if (pcRef.current && pcRef.current.signalingState !== 'closed')
+          await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+      } catch { /* ignore */ }
+    };
+    const handleIce = async ({ candidate }: any) => {
+      try {
+        if (pcRef.current && pcRef.current.signalingState !== 'closed' && candidate)
+          await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch { /* ignore stale */ }
+    };
+    const handlePeerLeft = () => {
+      setHasRemote(false);
+      setPeerDisconnected(true);
+      peerSocketIdRef.current = null;
+      pcRef.current?.close();
+      pcRef.current = null;
+      if (remoteRef.current) remoteRef.current.srcObject = null;
+    };
+
+    const sock = getSocket();
+    if (!sock) return;
+    sock.on('room-members',  handleRoomMembers);
+    sock.on('peer-joined',   handlePeerJoined);
+    sock.on('webrtc-offer',  handleOffer);
+    sock.on('webrtc-answer', handleAnswer);
+    sock.on('ice-candidate', handleIce);
+    sock.on('peer-left',     handlePeerLeft);
+
+    return () => {
+      sock.off('room-members',  handleRoomMembers);
+      sock.off('peer-joined',   handlePeerJoined);
+      sock.off('webrtc-offer',  handleOffer);
+      sock.off('webrtc-answer', handleAnswer);
+      sock.off('ice-candidate', handleIce);
+      sock.off('peer-left',     handlePeerLeft);
+    };
+  }, [streamId, getPC, getSocket, sendOffer]);
+
+  const stopAll = useCallback(() => {
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    localStreamRef.current?.getTracks().forEach(t => t.stop());
+    pcRef.current?.close();
+    pcRef.current = null;
+    peerSocketIdRef.current = null;
+    localStreamRef.current = null;
+    setLocalStream(null);
+    setHasRemote(false);
+    setConnState('closed');
+    setMediaReady(false);
+    const sock = getSocket();
+    if (sock && streamId) sock.emit('leave-stream', { streamId });
+  }, [streamId, getSocket]);
+
+  const toggleMic = () => {
+    localStreamRef.current?.getAudioTracks().forEach(t => { t.enabled = !t.enabled; });
+    setMicMuted(m => !m);
+  };
+  const toggleCam = () => {
+    localStreamRef.current?.getVideoTracks().forEach(t => { t.enabled = !t.enabled; });
+    setCamOff(c => !c);
+  };
+
+  // Cleanup on unmount
+  useEffect(() => () => { stopAll(); }, [stopAll]);
+
+  return {
+    localRef, remoteRef,
+    hasRemote, connState, peerDisconnected, mediaReady,
+    micMuted, camOff,
+    startMedia, stopAll, toggleMic, toggleCam,
+  };
+}
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
 const card: React.CSSProperties = {
@@ -106,16 +345,18 @@ export const PatientDashboardPage: React.FC = () => {
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [terminated, setTerminated] = useState<string | null>(null);
   const [highRiskBanner, setHighRiskBanner] = useState(false);
-  const localStreamRef = useRef<MediaStream | null>(null);
   const trustPollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // ── WebRTC ─────────────────────────────────────────────────────────────────
+  const {
+    localRef, remoteRef,
+    hasRemote, connState, peerDisconnected,
+    micMuted, camOff,
+    startMedia, stopAll: stopRtc, toggleMic, toggleCam,
+  } = usePatientWebRTC(session?.status === 'active' ? (session?.id ?? null) : null);
+
   // ── Stop camera tracks (called on block/imposter) ──────────────────────────
-  const stopCamera = useCallback(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(t => t.stop());
-      localStreamRef.current = null;
-    }
-  }, []);
+  const stopCamera = useCallback(() => { stopRtc(); }, [stopRtc]);
 
   // ── Load session + doctor details ──────────────────────────────────────────
   const load = useCallback(async () => {
@@ -143,14 +384,21 @@ export const PatientDashboardPage: React.FC = () => {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (view === 'browse') loadDoctors(); }, [view, loadDoctors]);
 
-  // ── Join socket room as soon as any session exists (critical: must be in room
-  //    before doctor_verified / session_activated fires) ─────────────────────
+  // ── Join socket room as soon as any session exists ──────────────────────────
   useEffect(() => {
     if (session?.id) {
       connect();
-      joinStream(session.id);
+      joinStream(session.id, 'patient');
     }
   }, [session?.id, connect, joinStream]);
+
+  // ── Start camera + mic when session becomes active ─────────────────────────
+  useEffect(() => {
+    if (session?.status === 'active') {
+      startMedia();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.status]);
 
   // ── Poll real trust score from backend while session is active ─────────────
   useEffect(() => {
@@ -215,6 +463,7 @@ export const PatientDashboardPage: React.FC = () => {
       load();
     });
     return () => { unsubVerified(); unsubActivated(); unsubBlocked(); unsubFlagged(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load, stopCamera]);
 
   // ── Connect to doctor ──────────────────────────────────────────────────────
@@ -397,8 +646,84 @@ export const PatientDashboardPage: React.FC = () => {
               {isActive && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: '1rem', alignItems: 'start', marginBottom: '1rem' }}>
 
-                  {/* LEFT 70% — session status + info */}
+                  {/* LEFT 70% — video call + session info */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+                    {/* ── VIDEO CALL PANEL ── */}
+                    <div style={{ ...card, overflow: 'hidden' }}>
+                      <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Video size={13} style={{ color: 'var(--accent-blue)' }} />
+                        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Video Consultation</span>
+                        <span style={{ marginLeft: 'auto', fontSize: '0.65rem', fontFamily: 'monospace',
+                          color: connState === 'connected' ? 'var(--status-safe)' : connState === 'failed' ? 'var(--status-danger)' : 'var(--text-muted)' }}>
+                          {connState === 'connected' ? '● Connected' : connState === 'checking' || connState === 'connecting' ? '◌ Connecting…' : connState === 'failed' ? '✕ Failed' : '○ Waiting'}
+                        </span>
+                      </div>
+
+                      {/* Video area */}
+                      <div style={{ position: 'relative', background: '#080810', aspectRatio: '16/9', overflow: 'hidden' }}>
+                        {/* Remote doctor video — large */}
+                        <video
+                          ref={remoteRef}
+                          autoPlay
+                          playsInline
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                        />
+
+                        {/* Placeholder when no remote stream */}
+                        {!hasRemote && (
+                          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.875rem' }}>
+                            <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '2px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              {connState === 'connecting' || connState === 'checking'
+                                ? <Loader2 size={30} style={{ color: 'rgba(255,255,255,0.5)', animation: 'spin 0.8s linear infinite' }} />
+                                : <User size={30} style={{ color: 'rgba(255,255,255,0.25)' }} />}
+                            </div>
+                            <p style={{ margin: 0, fontSize: '0.82rem', fontWeight: 500,
+                              color: peerDisconnected ? 'rgba(239,68,68,0.7)' : 'rgba(255,255,255,0.3)' }}>
+                              {peerDisconnected
+                                ? 'Doctor disconnected'
+                                : connState === 'connecting' || connState === 'checking'
+                                  ? 'Establishing connection…'
+                                  : connState === 'failed'
+                                    ? 'Connection failed — retrying…'
+                                    : 'Waiting for doctor to connect…'}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Patient self-preview PiP */}
+                        <div style={{ position: 'absolute', bottom: 12, right: 12, width: 120, height: 80, background: '#111', borderRadius: 10, border: '2px solid rgba(255,255,255,0.15)', overflow: 'hidden', boxShadow: '0 4px 20px rgba(0,0,0,0.7)' }}>
+                          <video
+                            ref={localRef}
+                            autoPlay muted playsInline
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                          />
+                          {camOff && (
+                            <div style={{ position: 'absolute', inset: 0, background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <VideoOff size={16} style={{ color: 'rgba(255,255,255,0.3)' }} />
+                            </div>
+                          )}
+                          <div style={{ position: 'absolute', bottom: 3, left: 0, right: 0, textAlign: 'center', fontSize: '0.55rem', color: 'rgba(255,255,255,0.4)', letterSpacing: '0.04em' }}>YOU</div>
+                        </div>
+                      </div>
+
+                      {/* Call controls */}
+                      <div style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1.25rem' }}>
+                        <button onClick={toggleMic} title={micMuted ? 'Unmute' : 'Mute'}
+                          style={{ width: 44, height: 44, borderRadius: '50%', cursor: 'pointer', border: `1px solid ${micMuted ? 'var(--status-danger-border)' : 'var(--border-default)'}`, background: micMuted ? 'var(--status-danger-dim)' : 'var(--bg-elevated)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {micMuted ? <MicOff size={16} style={{ color: 'var(--status-danger)' }} /> : <Mic size={16} style={{ color: 'var(--text-secondary)' }} />}
+                        </button>
+                        <button onClick={toggleCam} title={camOff ? 'Enable Camera' : 'Disable Camera'}
+                          style={{ width: 44, height: 44, borderRadius: '50%', cursor: 'pointer', border: `1px solid ${camOff ? 'var(--status-danger-border)' : 'var(--border-default)'}`, background: camOff ? 'var(--status-danger-dim)' : 'var(--bg-elevated)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {camOff ? <VideoOff size={16} style={{ color: 'var(--status-danger)' }} /> : <Video size={16} style={{ color: 'var(--text-secondary)' }} />}
+                        </button>
+                        <button onClick={() => { stopRtc(); }} title="Leave call"
+                          style={{ width: 52, height: 52, borderRadius: '50%', cursor: 'pointer', background: 'var(--status-danger)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 14px rgba(239,68,68,0.45)' }}>
+                          <PhoneOff size={18} style={{ color: '#fff' }} />
+                        </button>
+                      </div>
+                    </div>
+
                     {/* Session live indicator */}
                     <div style={{ ...card, padding: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
                       <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--status-safe)', display: 'inline-block', animation: 'status-pulse 2s infinite', flexShrink: 0 }} />
