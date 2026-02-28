@@ -39,14 +39,9 @@ class MFCCAnalyzer:
 
         try:
             # Extract MFCCs
-            mfccs = librosa.feature.mfcc(
-                y=audio,
-                sr=sample_rate,
-                n_mfcc=self.n_mfcc,
-                n_fft=self.n_fft,
-                hop_length=self.hop_length,
-                n_mels=self.n_mels,
-            )
+            mfccs = self._extract_mfcc(audio, sample_rate)
+            if mfccs is None:
+                return {'score': 0.5, 'features': []}
 
             # Delta and delta-delta for dynamic features
             mfcc_delta = librosa.feature.delta(mfccs)
@@ -78,6 +73,19 @@ class MFCCAnalyzer:
         except Exception as e:
             logger.error(f"MFCC analysis error: {e}")
             return {'score': 0.5, 'features': []}
+
+    def _extract_mfcc(self, audio: np.ndarray, sample_rate: int = 16000):
+        """Compatibility helper used by tests and internal analysis."""
+        if audio is None or len(audio) == 0:
+            return None
+        return librosa.feature.mfcc(
+            y=audio,
+            sr=sample_rate,
+            n_mfcc=self.n_mfcc,
+            n_fft=self.n_fft,
+            hop_length=self.hop_length,
+            n_mels=self.n_mels,
+        )
 
     def _compute_authenticity_score(
         self,

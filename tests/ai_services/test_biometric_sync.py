@@ -45,13 +45,13 @@ class TestBiometricSyncAnalysis:
         rppg = make_heart_signal(75.0)
         ecg = make_heart_signal(74.0)
         result = servicer._analyze_sync(rppg, ecg, sample_rate=30)
-        assert result['physiological_ok'] is True
+        assert bool(result['physiological_ok']) is True
 
     def test_physiological_fail_for_extreme_mismatch(self, servicer):
         rppg = make_heart_signal(40.0)
         ecg = make_heart_signal(160.0)
         result = servicer._analyze_sync(rppg, ecg, sample_rate=30)
-        assert result['physiological_ok'] is False
+        assert bool(result['physiological_ok']) is False
 
     def test_sync_score_range(self, servicer):
         rppg = make_heart_signal(80.0)
@@ -107,4 +107,4 @@ class TestReplayDetectionViaSignals:
         rppg = make_heart_signal(65.0, duration=8.0, noise=0.001)
         result = servicer._analyze_sync(rppg, ecg, sample_rate=30)
         # Should indicate poor sync (score < 0.65)
-        assert result['sync_score'] < 0.75 or result['physiological_ok'] is False
+        assert result['sync_score'] < 0.75 or bool(result['physiological_ok']) is False

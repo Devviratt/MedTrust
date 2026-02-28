@@ -1,5 +1,5 @@
 const request = require('supertest');
-const { app } = require('../../backend/src/server');
+const { app, server } = require('../../backend/src/server');
 const { pool } = require('../../backend/src/config/database');
 
 describe('Auth - Doctor Login', () => {
@@ -13,7 +13,6 @@ describe('Auth - Doctor Login', () => {
 
   afterAll(async () => {
     await pool.query(`DELETE FROM doctors WHERE email = 'test@medtrust.ai'`);
-    await pool.end();
   });
 
   test('POST /api/v1/doctor/login - success with valid credentials', async () => {
@@ -90,5 +89,25 @@ describe('Auth - Protected Routes', () => {
       .post('/api/v1/doctor/logout')
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
+  });
+});
+
+afterAll(async () => {
+  try {
+    await pool.query(`DELETE FROM doctors WHERE email = 'test@medtrust.ai'`);
+  } catch (_) {
+    // ignore cleanup failures in test teardown
+  }
+  try {
+    await pool.end();
+  } catch (_) {
+    // ignore pool shutdown failures in test teardown
+  }
+  await new Promise((resolve) => {
+    try {
+      server.close(() => resolve());
+    } catch (_) {
+      resolve();
+    }
   });
 });
