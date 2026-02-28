@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}/medtrust
+  IMAGE_PREFIX: devviratt/medtrust
 
 jobs:
   # ─── Backend Tests ────────────────────────────────────────────────────────
