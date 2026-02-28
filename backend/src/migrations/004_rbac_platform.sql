@@ -10,7 +10,181 @@ CREATE TABLE IF NOT EXISTS users (
   name          TEXT NOT NULL,
   email         TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
-  role          TEXT NOT NULL CHECK (role IN ('admin', 'doctor', 'patient')),
+  role          TEXT NOT NULL CHECK (role IN You are a Senior Deepfake Detection Engineer + Real-Time Biometric Systems Architect.
+
+Enhance the existing Doctor Identity Re-Verification system.
+
+IMPORTANT CONSTRAINTS:
+- Do NOT modify authentication
+- Do NOT modify routing
+- Do NOT modify dashboard layout
+- Do NOT remove existing verification pipeline
+- Do NOT break trust engine
+- Do NOT change API contracts
+- Do NOT introduce new runtime errors
+
+Only enhance detection depth and robustness.
+
+The goal: Advanced real-time deepfake detection without altering system architecture.
+
+========================================================
+PHASE 1 — ADVANCED FACE DEEPFAKE DETECTION
+========================================================
+
+Keep existing Face Verification logic.
+
+Enhance by adding:
+
+1. Micro-expression consistency analysis
+   - Track subtle facial muscle movement.
+   - Compare temporal coherence across frames.
+   - Deepfake videos often fail micro-expression continuity.
+
+2. Frame-level GAN artifact detection:
+   - Detect:
+     - Unnatural skin smoothing
+     - Boundary blending issues
+     - Eye reflection inconsistency
+     - Teeth rendering artifacts
+
+3. Head pose vs face mesh alignment validation:
+   - Detect 3D inconsistencies.
+   - If face mesh does not align with natural head movement → suspicious.
+
+Add:
+deepfakeFaceScore (0–100)
+
+This score affects existing faceScore internally.
+Do not create separate trust weight.
+Merge inside videoScore pipeline.
+
+========================================================
+PHASE 2 — ADVANCED VOICE ANTI-SPOOFING
+========================================================
+
+Enhance existing Voice Authentication:
+
+1. Detect:
+   - Spectral flatness anomalies
+   - Phase coherence distortion
+   - Synthetic pitch uniformity
+   - Over-smoothed frequency bands
+
+2. Add replay attack detection:
+   - Check echo patterns
+   - Detect pre-recorded playback signatures
+
+3. Add challenge-response:
+   - Randomly generate 3-word phrase
+   - Require doctor to repeat
+   - Compare phoneme timing vs stored baseline
+
+Add:
+deepfakeVoiceScore (0–100)
+
+Merge into voiceScore before trust calculation.
+Do NOT change weight structure.
+
+========================================================
+PHASE 3 — REAL-TIME LIVENESS HARDENING
+========================================================
+
+Enhance existing liveness detection:
+
+1. Dynamic lighting challenge:
+   - Ask doctor to tilt screen slightly.
+   - Detect real-time lighting shift across face.
+
+2. Motion latency detection:
+   - Measure response time to blink command.
+   - Synthetic systems have micro-delay.
+
+3. IR reflection check (if device supports):
+   - Validate real eye corneal reflection.
+
+If liveness suspicious:
+Reduce faceScore internally.
+
+========================================================
+PHASE 4 — TEMPORAL CONSISTENCY VALIDATION
+========================================================
+
+Implement sliding window validation:
+
+Every 10 seconds:
+
+- Compare current biometric signature with last 30 seconds.
+- If sudden drastic identity shift detected:
+  Raise anomaly.
+
+This prevents mid-session deepfake injection.
+
+========================================================
+PHASE 5 — DEEPFAKE CONFIDENCE FUSION
+========================================================
+
+Create internal fusion score:
+
+deepfakeRiskScore =
+  weighted(
+    deepfakeFaceScore,
+    deepfakeVoiceScore,
+    livenessScore,
+    temporalConsistencyScore
+  )
+
+If deepfakeRiskScore < 50:
+  Trigger HIGH alert.
+
+Do NOT expose raw risk score to frontend.
+Only adjust final trust output.
+
+========================================================
+PHASE 6 — SAFE FAILURE MODE
+========================================================
+
+If deepfake detected:
+
+1. Do NOT crash system.
+2. Do NOT return 500.
+3. Do NOT auto-end session instantly.
+
+Instead:
+- Lower trust score below 50.
+- Trigger alert.
+- Notify admin via existing alert system.
+- Activate kill-switch only if multiple signals fail.
+
+========================================================
+PHASE 7 — PERFORMANCE SAFETY
+========================================================
+
+Ensure:
+
+- No heavy model blocking main thread.
+- Use async worker for detection.
+- Timeout safe (max 3 sec per check).
+- If detection fails:
+  Use last known good value.
+  Mark confidence low.
+  Continue session.
+
+========================================================
+EXPECTED RESULT
+========================================================
+
+Doctor Verification becomes:
+
+- Deepfake face resistant
+- Voice cloning resistant
+- Replay attack resistant
+- Mid-session injection resistant
+- Challenge-response protected
+- Real-time temporal validated
+- Production safe
+- Zero architecture break
+- No UI changes
+- No new API endpoints required('admin', 'doctor', 'patient')),
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_login    TIMESTAMPTZ

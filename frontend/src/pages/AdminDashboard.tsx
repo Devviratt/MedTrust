@@ -3,8 +3,9 @@ import { useAuthStore } from '../store/authStore';
 import { adminApi, authApi, type RegisterUserPayload } from '../services/api';
 import {
   Users, Activity, Shield, AlertTriangle, Settings,
-  CheckCircle, RefreshCw, Plus, Save, Loader2,
+  CheckCircle, XCircle, RefreshCw, Plus, Save, Loader2,
   Eye, EyeOff, BarChart3, Fingerprint, BadgeCheck, RotateCcw,
+  TrendingUp, TrendingDown, Brain, Lock,
 } from 'lucide-react';
 import { DoctorEnrollModal } from '../components/shared/DoctorEnrollModal';
 import toast from 'react-hot-toast';
@@ -194,7 +195,7 @@ const RegisterModal: React.FC<{ onClose: () => void; onSuccess: (user?: any) => 
 };
 
 // ─── Stat Tile ─────────────────────────────────────────────────────────────────
-const StatTile: React.FC<{ label: string; value: any; sub: string; icon: React.ReactNode; accent: string }> = ({ label, value, sub, icon, accent }) => (
+const StatTile: React.FC<{ label: string; value: any; sub: React.ReactNode; icon: React.ReactNode; accent: string }> = ({ label, value, sub, icon, accent }) => (
   <div style={{ ...card, padding: '1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
       <span style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>{label}</span>
@@ -218,11 +219,64 @@ const ConfBar: React.FC<{ label: string; value: number; color?: string }> = ({ l
   </div>
 );
 
+// ─── Trend chip ────────────────────────────────────────────────────────────────
+const TrendChip: React.FC<{ value: number | null; suffix?: string; inverse?: boolean }> = ({ value, suffix = '%', inverse = false }) => {
+  if (value === null || value === undefined) return null;
+  const up   = value >= 0;
+  const good = inverse ? !up : up;
+  const col  = good ? 'var(--status-safe)' : 'var(--status-danger)';
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.65rem', fontWeight: 700, color: col }}>
+      {up ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+      {value > 0 ? '+' : ''}{value}{suffix} vs prior 24h
+    </span>
+  );
+};
+
+// ─── Threat Activity mini bar chart ───────────────────────────────────────────
+const ThreatActivityChart: React.FC<{ data: { hour: string; count: number }[] }> = ({ data }) => {
+  const max = Math.max(...data.map(d => d.count), 1);
+  const show = data.filter((_, i) => i % 3 === 0); // every 3rd label
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 56 }}>
+        {data.map((d, i) => (
+          <div key={i} title={`${d.hour}: ${d.count} events`}
+            style={{
+              flex: 1, minWidth: 4,
+              height: `${Math.max((d.count / max) * 100, d.count > 0 ? 8 : 2)}%`,
+              background: d.count > 0 ? 'var(--accent-blue)' : 'var(--border-subtle)',
+              borderRadius: '2px 2px 0 0',
+              opacity: d.count > 0 ? 0.85 : 0.3,
+              transition: 'height 0.4s ease',
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem' }}>
+        {show.map((d, i) => (
+          <span key={i} style={{ fontSize: '0.58rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{d.hour}</span>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 // ─── Main Admin Dashboard ─────────────────────────────────────────────────────
 export const AdminDashboard: React.FC = () => {
   const { user } = useAuthStore();
   const [tab, setTab]           = useState<'overview'|'users'|'sessions'|'thresholds'>('overview');
+  // Legacy stats (Trust Distribution card)
   const [stats, setStats]       = useState<any>(null);
+  // New fully-dynamic overview state
+  const [adminStats, setAdminStats]               = useState<any>(null);
+  const [adminStatsLoading, setAdminStatsLoading] = useState(true);
+  const [adminStatsError, setAdminStatsError]     = useState(false);
+  const [threatActivity, setThreatActivity]       = useState<{ hour: string; count: number }[]>([]);
+  const [threatLoading, setThreatLoading]         = useState(true);
+  const [recentVerifs, setRecentVerifs]           = useState<any[]>([]);
+  const [verifsLoading, setVerifsLoading]         = useState(true);
+
   const [users, setUsers]       = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [roleFilter, setRoleFilter] = useState('');
@@ -233,9 +287,41 @@ export const AdminDashboard: React.FC = () => {
 
   const doctors = users.filter(u => u.role === 'doctor' || u.role === 'admin');
 
+  // ── Fetch overview data ──
+  const fetchAdminStats = useCallback(async () => {
+    setAdminStatsLoading(true);
+    setAdminStatsError(false);
+    try {
+      const r = await adminApi.getAdminStats();
+      setAdminStats(r.data);
+    } catch {
+      setAdminStatsError(true);
+    } finally {
+      setAdminStatsLoading(false);
+    }
+  }, []);
+
+  const fetchThreatActivity = useCallback(async () => {
+    setThreatLoading(true);
+    try {
+      const r = await adminApi.getThreatActivity();
+      setThreatActivity(r.data?.activity || []);
+    } catch {} finally { setThreatLoading(false); }
+  }, []);
+
+  const fetchRecentVerifications = useCallback(async () => {
+    setVerifsLoading(true);
+    try {
+      const r = await adminApi.getRecentVerifications();
+      setRecentVerifs(r.data?.verifications || []);
+    } catch {} finally { setVerifsLoading(false); }
+  }, []);
+
+  // ── Legacy stats (for Trust Distribution) ──
   const fetchStats = useCallback(async () => {
     try { const r = await adminApi.getDashboardStats(); setStats(r.data); } catch {}
   }, []);
+
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try { const r = await adminApi.getUsers(roleFilter ? { role: roleFilter } : undefined); setUsers(r.data?.users || []); }
@@ -264,6 +350,7 @@ export const AdminDashboard: React.FC = () => {
       toast.error(err.response?.data?.error || 'Re-enroll reset failed');
     } finally { setActionLoading(null); }
   };
+
   const fetchSessions = useCallback(async () => {
     setLoading(true);
     try { const r = await adminApi.getSessions(); setSessions(r.data?.sessions || []); }
@@ -271,7 +358,14 @@ export const AdminDashboard: React.FC = () => {
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetchStats(); }, [fetchStats]);
+  // On mount: fetch all overview data
+  useEffect(() => {
+    fetchAdminStats();
+    fetchThreatActivity();
+    fetchRecentVerifications();
+    fetchStats();
+  }, [fetchAdminStats, fetchThreatActivity, fetchRecentVerifications, fetchStats]);
+
   useEffect(() => { if (tab === 'users')    fetchUsers();    }, [tab, fetchUsers]);
   useEffect(() => { if (tab === 'sessions') fetchSessions(); }, [tab, fetchSessions]);
 
@@ -323,13 +417,74 @@ export const AdminDashboard: React.FC = () => {
       {/* Page content */}
       <div>
 
-        {/* Stat tiles */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '0.875rem', marginBottom: '1.5rem' }}>
-          <StatTile label="Total Doctors"   value={stats?.doctors?.total ?? '—'}  sub={`${stats?.doctors?.active ?? 0} active`} accent="var(--accent-blue)" icon={<Users size={14}/>}/>
-          <StatTile label="Active Sessions" value={stats?.streams?.active ?? '—'} sub={`${stats?.streams?.total ?? 0} total`}   accent="var(--status-safe)" icon={<Activity size={14}/>}/>
-          <StatTile label="Alerts (24h)"    value={stats?.alerts_24h ?? '—'}      sub="Critical events"                         accent="var(--status-danger)" icon={<AlertTriangle size={14}/>}/>
-          <StatTile label="Avg Trust Score" value={stats?.trust_score_24h?.avg ? `${Math.round(stats.trust_score_24h.avg)}` : '—'} sub="Last 24 hours" accent="var(--status-safe)" icon={<Shield size={14}/>}/>
-        </div>
+        {/* ── Stat tiles — 8 cards, all from /admin/stats ── */}
+        {adminStatsError ? (
+          <div style={{ ...card, padding: '1.25rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', color: 'var(--status-danger)' }}>
+            <AlertTriangle size={15} />
+            <span style={{ fontSize: '0.82rem' }}>Failed to load dashboard stats. <button style={{ background: 'none', border: 'none', color: 'var(--accent-blue)', cursor: 'pointer', padding: 0, fontSize: '0.82rem' }} onClick={fetchAdminStats}>Retry</button></span>
+          </div>
+        ) : adminStatsLoading ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '0.875rem', marginBottom: '1.5rem' }}>
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} style={{ ...card, padding: '1rem 1.25rem', height: 90, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Loader2 size={16} style={{ animation: 'spin 0.8s linear infinite', color: 'var(--text-muted)' }} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '0.875rem', marginBottom: '1.5rem' }}>
+            <StatTile
+              label="Total Doctors"
+              value={adminStats?.totalDoctors ?? '—'}
+              sub={`${adminStats?.activeDoctors ?? 0} active`}
+              accent="var(--accent-blue)" icon={<Users size={14}/>}
+            />
+            <StatTile
+              label="Active Sessions"
+              value={adminStats?.activeSessions ?? '—'}
+              sub={`${adminStats?.totalSessions ?? 0} total sessions`}
+              accent="var(--status-safe)" icon={<Activity size={14}/>}
+            />
+            <StatTile
+              label="Alerts (24h)"
+              value={adminStats?.alerts24h ?? '—'}
+              sub={<TrendChip value={adminStats?.alertsChangePercent ?? null} inverse />}
+              accent="var(--status-danger)" icon={<AlertTriangle size={14}/>}
+            />
+            <StatTile
+              label="Avg Trust Score"
+              value={adminStats?.avgTrustScore24h ? `${adminStats.avgTrustScore24h}%` : '—'}
+              sub="Last 24 hours"
+              accent="var(--status-safe)" icon={<Shield size={14}/>}
+            />
+            <StatTile
+              label="Trust Score (Global)"
+              value={adminStats?.trustScoreGlobal ? `${adminStats.trustScoreGlobal}%` : '—'}
+              sub={<TrendChip value={adminStats?.trustScoreChangePercent ?? null} />}
+              accent="var(--accent-blue)" icon={<BarChart3 size={14}/>}
+            />
+            <StatTile
+              label="Threats Blocked"
+              value={adminStats?.threatsBlocked ?? '—'}
+              sub={adminStats?.threatsBlockedChange != null
+                ? `${adminStats.threatsBlockedChange >= 0 ? '+' : ''}${adminStats.threatsBlockedChange} vs prior 24h`
+                : 'Blocked sessions'}
+              accent="var(--status-danger)" icon={<Lock size={14}/>}
+            />
+            <StatTile
+              label="Total Patients"
+              value={adminStats?.totalPatients ?? '—'}
+              sub="Registered on platform"
+              accent="var(--status-safe)" icon={<Users size={14}/>}
+            />
+            <StatTile
+              label="Deepfakes Detected"
+              value={adminStats?.deepfakesDetected ?? '—'}
+              sub={<TrendChip value={adminStats?.deepfakeChangePercent ?? null} inverse />}
+              accent="var(--status-warn)" icon={<Brain size={14}/>}
+            />
+          </div>
+        )}
 
         {/* Tab nav */}
         <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1.25rem', background: 'var(--bg-surface)', borderRadius: 12, padding: '0.25rem', width: 'fit-content', border: '1px solid var(--border-default)' }}>
@@ -348,38 +503,166 @@ export const AdminDashboard: React.FC = () => {
 
         {/* ── OVERVIEW ── */}
         {tab === 'overview' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div style={{ ...card, padding: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-subtle)' }}>
-                <Activity size={13} style={{ color: 'var(--accent-blue)' }} />
-                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Trust Distribution (24h)</span>
-              </div>
-              {stats?.trust_score_24h ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-                  <ConfBar label="Average" value={Math.round(stats.trust_score_24h.avg)} color="var(--status-safe)" />
-                  <ConfBar label="Maximum" value={Math.round(stats.trust_score_24h.max)} color="var(--accent-blue)" />
-                  <ConfBar label="Minimum" value={Math.round(stats.trust_score_24h.min)} color="var(--status-danger)" />
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', paddingTop: '0.5rem', borderTop: '1px solid var(--border-subtle)' }}>
-                    Alert events: <span style={{ color: 'var(--status-danger)', fontFamily: 'monospace', fontWeight: 700 }}>{stats.trust_score_24h.alert_count}</span>
-                  </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+            {/* Row 1: Trust Distribution + Platform Health */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+
+              {/* Trust Distribution (24h) */}
+              <div style={{ ...card, padding: '1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <Activity size={13} style={{ color: 'var(--accent-blue)' }} />
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Trust Distribution (24h)</span>
                 </div>
-              ) : <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '1.5rem 0' }}>No data yet</div>}
-            </div>
-            <div style={{ ...card, padding: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-subtle)' }}>
-                <Shield size={13} style={{ color: 'var(--accent-blue)' }} />
-                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Platform Status</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
-                {['AI Trust Engine', 'Blockchain Audit', 'Impersonation Detector', 'SMS Alert Queue', 'Zero-Trust RBAC'].map(item => (
-                  <div key={item} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
-                    <CheckCircle size={13} style={{ color: 'var(--status-safe)', flexShrink: 0 }} />
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', flex: 1 }}>{item}</span>
-                    <span style={{ fontSize: '0.6rem', fontFamily: 'monospace', color: 'var(--status-safe)', letterSpacing: '0.06em' }}>OPERATIONAL</span>
+                {stats?.trust_score_24h ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                    <ConfBar label="Average" value={Math.round(stats.trust_score_24h.avg)} color="var(--status-safe)" />
+                    <ConfBar label="Maximum" value={Math.round(stats.trust_score_24h.max)} color="var(--accent-blue)" />
+                    <ConfBar label="Minimum" value={Math.round(stats.trust_score_24h.min)} color="var(--status-danger)" />
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', paddingTop: '0.5rem', borderTop: '1px solid var(--border-subtle)' }}>
+                      Alert events: <span style={{ color: 'var(--status-danger)', fontFamily: 'monospace', fontWeight: 700 }}>{stats.trust_score_24h.alert_count}</span>
+                    </div>
                   </div>
-                ))}
+                ) : <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '1.5rem 0' }}>No trust data in last 24h</div>}
+              </div>
+
+              {/* Platform Health — from /admin/stats serviceHealth */}
+              <div style={{ ...card, padding: '1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Shield size={13} style={{ color: 'var(--accent-blue)' }} />
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Platform Health</span>
+                  </div>
+                  {!adminStatsLoading && (
+                    <button className="ds-btn ds-btn-ghost ds-btn-sm" onClick={fetchAdminStats} title="Refresh">
+                      <RefreshCw size={11} />
+                    </button>
+                  )}
+                </div>
+                {adminStatsLoading ? (
+                  <div style={{ textAlign: 'center', padding: '1.5rem 0', color: 'var(--text-muted)' }}>
+                    <Loader2 size={16} style={{ animation: 'spin 0.8s linear infinite', display: 'inline-block' }} />
+                  </div>
+                ) : (() => {
+                  const h = adminStats?.serviceHealth || {};
+                  const services = [
+                    { label: 'AI Trust Engine',        status: h.videoStatus ?? 'OK' },
+                    { label: 'Audio Verification',      status: h.audioStatus ?? 'OK' },
+                    { label: 'Blockchain Audit Chain',  status: h.chainStatus ?? 'OK' },
+                    { label: 'Impersonation Detector',  status: adminStats ? 'OK' : 'UNKNOWN' },
+                    { label: 'Zero-Trust RBAC',         status: adminStats ? 'OK' : 'UNKNOWN' },
+                  ];
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                      {services.map(svc => {
+                        const ok  = svc.status === 'OK';
+                        const col = ok ? 'var(--status-safe)' : 'var(--status-danger)';
+                        return (
+                          <div key={svc.label} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+                            {ok
+                              ? <CheckCircle size={13} style={{ color: col, flexShrink: 0 }} />
+                              : <XCircle    size={13} style={{ color: col, flexShrink: 0 }} />}
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', flex: 1 }}>{svc.label}</span>
+                            <span style={{ fontSize: '0.6rem', fontFamily: 'monospace', color: col, letterSpacing: '0.06em' }}>
+                              {ok ? 'OPERATIONAL' : svc.status}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
+
+            {/* Row 2: Threat Activity (24h bar chart) */}
+            <div style={{ ...card, padding: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-subtle)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <AlertTriangle size={13} style={{ color: 'var(--status-warn)' }} />
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Threat Activity (Last 24h)</span>
+                </div>
+                <button className="ds-btn ds-btn-ghost ds-btn-sm" onClick={fetchThreatActivity} title="Refresh">
+                  <RefreshCw size={11} />
+                </button>
+              </div>
+              {threatLoading ? (
+                <div style={{ textAlign: 'center', padding: '1.5rem 0', color: 'var(--text-muted)' }}>
+                  <Loader2 size={16} style={{ animation: 'spin 0.8s linear infinite', display: 'inline-block' }} />
+                </div>
+              ) : threatActivity.length === 0 ? (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem', textAlign: 'center', padding: '1.5rem 0' }}>No activity data available</div>
+              ) : (
+                <ThreatActivityChart data={threatActivity} />
+              )}
+            </div>
+
+            {/* Row 3: Recent Identity Verifications */}
+            <div style={{ ...card, padding: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-subtle)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Fingerprint size={13} style={{ color: 'var(--accent-blue)' }} />
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Recent Identity Verifications</span>
+                </div>
+                <button className="ds-btn ds-btn-ghost ds-btn-sm" onClick={fetchRecentVerifications} title="Refresh">
+                  <RefreshCw size={11} />
+                </button>
+              </div>
+              {verifsLoading ? (
+                <div style={{ textAlign: 'center', padding: '1.5rem 0', color: 'var(--text-muted)' }}>
+                  <Loader2 size={16} style={{ animation: 'spin 0.8s linear infinite', display: 'inline-block' }} />
+                </div>
+              ) : recentVerifs.length === 0 ? (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem', textAlign: 'center', padding: '1.5rem 0' }}>No verification records found</div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                    <thead>
+                      <tr>
+                        <TH>Provider</TH>
+                        <TH>Role</TH>
+                        <TH>Status</TH>
+                        <TH>Trust Score</TH>
+                        <TH>Timestamp</TH>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recentVerifs.map((v, i) => {
+                        const col = v.status === 'verified' ? 'var(--status-safe)'
+                          : v.status === 'pending' ? 'var(--status-warn)'
+                          : 'var(--status-danger)';
+                        const bg  = v.status === 'verified' ? 'var(--status-safe-dim)'
+                          : v.status === 'pending' ? 'var(--status-warn-dim)'
+                          : 'var(--status-danger-dim)';
+                        const bdr = v.status === 'verified' ? 'var(--status-safe-border)'
+                          : v.status === 'pending' ? 'var(--status-warn-border)'
+                          : 'var(--status-danger-border)';
+                        return (
+                          <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)', transition: 'background 0.15s' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                            <td style={{ padding: '0.5rem 0.75rem', color: 'var(--text-primary)', fontWeight: 500 }}>{v.providerName}</td>
+                            <td style={{ padding: '0.5rem 0.75rem' }}>{roleBadge(v.role)}</td>
+                            <td style={{ padding: '0.5rem 0.75rem' }}>
+                              <span style={{ fontSize: '0.65rem', padding: '0.15rem 0.5rem', borderRadius: 99, background: bg, border: `1px solid ${bdr}`, color: col, fontWeight: 600, textTransform: 'capitalize' }}>
+                                {v.status}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.5rem 0.75rem', fontFamily: 'monospace', fontWeight: 700, color: trustColor(v.trustScore) }}>
+                              {v.trustScore}%
+                            </td>
+                            <td style={{ padding: '0.5rem 0.75rem', color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace' }}>
+                              {v.timestamp ? new Date(v.timestamp).toLocaleString() : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
           </div>
         )}
 

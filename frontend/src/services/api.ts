@@ -184,6 +184,10 @@ export const adminApi = {
   getUsersGrouped:  () => api.get('/admin/users/grouped'),
   blockUser:        (userId: string, block: boolean) => api.post(`/admin/users/${userId}/block`, { block }),
   deleteUser:       (userId: string) => api.delete(`/admin/users/${userId}`),
+  // Fully dynamic stats endpoints
+  getAdminStats:           () => api.get('/admin/stats'),
+  getThreatActivity:       () => api.get('/admin/threat-activity'),
+  getRecentVerifications:  () => api.get('/admin/recent-verifications'),
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────

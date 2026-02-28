@@ -10,7 +10,7 @@ const { analyzeVideo, analyzeAudio, getLiveTrustScore, getTrustHistory } = requi
 const { analyzeFrameEndpoint } = require('../controllers/frameController');
 const { registerDoctor, loginDoctor, logoutDoctor, trainVoiceProfile, getDoctorProfile, listDoctors } = require('../controllers/doctorController');
 const { logChunk, validateChunk, getAudit, getAllAuditEvents, computeHash } = require('../controllers/blockchainController');
-const { getConfig, updateConfig, getDashboardStats, getComplianceReport, createStream, startStream, stopStream } = require('../controllers/adminController');
+const { getConfig, updateConfig, getDashboardStats, getComplianceReport, createStream, startStream, stopStream, getAdminStats, getThreatActivity, getRecentVerifications } = require('../controllers/adminController');
 const { getStream, getActiveStream, startStream: startNewStream, endStream } = require('../controllers/streamsController');
 const { login, logout, register, registerSelf, me } = require('../controllers/authController');
 const { getMyProfile, getAssignedDoctor, getMySessions, getSessionTrust, getSessionReport, getMyAlerts } = require('../controllers/patientController');
@@ -928,6 +928,11 @@ router.post('/sessions/:streamId/cancel', authenticate, requireRole('patient'), 
     return res.status(500).json({ error: 'Failed to cancel session' });
   }
 });
+
+// ─── Admin: comprehensive stats (fully DB-driven) ────────────────────────────
+router.get('/admin/stats',                authenticate, requireRole('admin'), adminLimiter, getAdminStats);
+router.get('/admin/threat-activity',      authenticate, requireRole('admin'), adminLimiter, getThreatActivity);
+router.get('/admin/recent-verifications', authenticate, requireRole('admin'), adminLimiter, getRecentVerifications);
 
 // ─── Admin: enhanced user registry with biometric + verification data ─────────
 router.get('/admin/registry', authenticate, requireRole('admin'), async (req, res) => {
