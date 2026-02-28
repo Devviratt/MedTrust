@@ -7,7 +7,7 @@ import { onSessionActivated, onSessionBlocked, onIdentityFlagged, onDoctorVerifi
 import toast from 'react-hot-toast';
 import {
   Shield, CheckCircle, AlertTriangle, Activity, Clock,
-  Building, FileText, Loader2, RefreshCw, UserCircle,
+  Building, Loader2, RefreshCw, UserCircle,
   Stethoscope, ArrowRight, XCircle, Wifi, WifiOff,
   Award, Hash, Calendar, TrendingUp,
 } from 'lucide-react';
@@ -234,7 +234,7 @@ export const PatientDashboardPage: React.FC = () => {
   // ── Derived values ─────────────────────────────────────────────────────────
   const hasSession  = !!session;
   const isActive    = session?.status === 'active';
-  const isVerifying = session?.status === 'doctor_verifying' || session?.status === 'pending';
+  const isVerifying = session?.status === 'pending' || session?.status === 'doctor_verifying' || session?.status === 'patient_verifying' || session?.status === 'mutual_verified';
   const isBlocked   = session?.status === 'blocked';
   const ts          = liveTrust ?? (trustScore ? { score: Math.round(trustScore.trust_score ?? 0), status: trustScore.status ?? 'safe' } : null);
 
@@ -372,14 +372,24 @@ export const PatientDashboardPage: React.FC = () => {
                 </button>
               </div>
 
-              {/* Pending / verifying state */}
+              {/* Pending / verifying state — dynamic, no static message */}
               {isVerifying && (
-                <div style={{ ...card, padding: '2rem', marginBottom: '1rem', textAlign: 'center' }}>
-                  <Loader2 size={28} style={{ color: 'var(--accent-blue)', animation: 'spin 0.8s linear infinite', marginBottom: '0.875rem' }} />
-                  <p style={{ margin: 0, fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.95rem' }}>Awaiting Doctor Verification</p>
-                  <p style={{ margin: '0.4rem 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    Session will activate automatically once the doctor completes identity verification.
-                  </p>
+                <div style={{ ...card, padding: '2rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+                  <Loader2 size={26} style={{ color: 'var(--accent-blue)', animation: 'spin 0.8s linear infinite', flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-primary)', marginBottom: '0.2rem' }}>
+                      {session?.status === 'pending' ? 'Waiting for doctor to accept…' :
+                       session?.status === 'doctor_verifying' ? 'Doctor is completing identity verification…' :
+                       'Finalising session…'}
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                      Session will activate automatically — no refresh needed
+                    </div>
+                  </div>
+                  <span style={{ marginLeft: 'auto', fontSize: '0.62rem', padding: '0.15rem 0.5rem', borderRadius: 99, fontWeight: 600,
+                    background: 'var(--status-warn-dim)', border: '1px solid var(--status-warn-border)', color: 'var(--status-warn)', whiteSpace: 'nowrap' }}>
+                    {session?.status ?? 'pending'}
+                  </span>
                 </div>
               )}
 
