@@ -104,7 +104,7 @@ const App: React.FC = () => {
 
         {/* ── Doctor / Admin shared routes ── */}
         <Route path="/doctor-dashboard" element={
-          <RequireAuth roles={['doctor', 'admin']}>
+          <RequireAuth roles={['doctor']}>
             {withLayout(<DoctorDashboardPage />)}
           </RequireAuth>
         } />

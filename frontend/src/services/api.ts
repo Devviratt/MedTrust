@@ -10,6 +10,12 @@ const api: AxiosInstance = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+const roleHomePath = (role: string | null): string => {
+  if (role === 'admin') return '/admin';
+  if (role === 'patient') return '/patient-dashboard';
+  return '/doctor-dashboard';
+};
+
 // Read JWT from Zustand persisted store (key: medtrust-auth)
 const getToken = (): string | null => {
   try {
@@ -17,6 +23,16 @@ const getToken = (): string | null => {
     if (!raw) return null;
     return JSON.parse(raw)?.state?.token ?? null;
   } catch { return null; }
+};
+
+const getStoredRole = (): string | null => {
+  try {
+    const raw = localStorage.getItem('medtrust-auth');
+    if (!raw) return null;
+    return JSON.parse(raw)?.state?.user?.role ?? null;
+  } catch {
+    return null;
+  }
 };
 
 // Attach JWT token to every request
@@ -45,6 +61,8 @@ api.interceptors.response.use(
     // Enrollment 403s — handled by DoctorDashboardPage with proper UI, suppress global toast
     const responseCode = (err.response?.data as any)?.code;
     const isEnrollmentCode = responseCode === 'ENROLLMENT_REQUIRED' || responseCode === 'PENDING_APPROVAL';
+    const responseError = (err.response?.data as any)?.error;
+    const isRoleMismatch = status === 403 && responseError === 'Insufficient role';
 
     if (status === 401 && !isAuthEndpoint) {
       // Token expired or invalid on a protected route — clear and redirect
@@ -55,9 +73,18 @@ api.interceptors.response.use(
       return Promise.reject(err);
     }
 
+    if (isRoleMismatch) {
+      const role = getStoredRole();
+      const home = roleHomePath(role);
+      if (window.location.pathname !== home) {
+        window.location.href = home;
+      }
+      return Promise.reject(err);
+    }
+
     // Surface errors as toasts — skip 401 on auth endpoints (handled inline)
     // skip 404 (expected empty states), 400 (handled inline), 401 on auth, enrollment 403s
-    const skipToast = status === 404 || status === 400 || isAuthEndpoint || isEnrollmentCode;
+    const skipToast = status === 404 || status === 400 || isAuthEndpoint || isEnrollmentCode || isRoleMismatch;
     if (!skipToast) {
       const msg = (err.response?.data as any)?.error
         || (err.response?.data as any)?.message
