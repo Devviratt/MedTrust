@@ -30,13 +30,14 @@ export const LoginPage: React.FC = () => {
       toast.success(`Welcome back, ${user.name}`, { duration: 2500 });
       navigate(roleDest(user.role), { replace: true });
     } catch (err: any) {
+      const status = err?.response?.status;
       const isNetworkError = err?.code === 'ERR_NETWORK' || err?.message === 'Network Error';
-      const isBackendNotConfigured = err?.response?.status === 404;
-      const msg = isNetworkError
-        ? 'Cannot reach server. Configure VITE_API_URL / VITE_SOCKET_URL for deployed frontend.'
-        : isBackendNotConfigured
-          ? 'Backend API is not connected. Set VITE_API_URL / VITE_SOCKET_URL and backend CORS.'
-        : (err.response?.data?.error || err.message || 'Login failed. Check your credentials.');
+      const isBackendNotConfigured = err?.code === 'API_CONFIG_MISSING' || status === 404 || status === 405;
+      const msg = isBackendNotConfigured
+        ? 'Backend API is not connected. Set VITE_API_URL / VITE_SOCKET_URL and backend CORS.'
+        : isNetworkError
+          ? 'Cannot reach server. Configure VITE_API_URL / VITE_SOCKET_URL for deployed frontend.'
+          : (err.response?.data?.error || err.message || 'Login failed. Check your credentials.');
       setError(msg);
     } finally {
       setLoading(false);

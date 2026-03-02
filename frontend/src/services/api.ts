@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import toast from 'react-hot-toast';
-import { API_BASE_URL } from '../config/runtime';
+import { API_BASE_URL, getApiConfigError } from '../config/runtime';
 
 const BASE_URL = API_BASE_URL;
 
@@ -21,6 +21,13 @@ const getToken = (): string | null => {
 
 // Attach JWT token to every request
 api.interceptors.request.use((config) => {
+  const configError = getApiConfigError();
+  if (configError) {
+    const err: any = new Error(configError);
+    err.code = 'API_CONFIG_MISSING';
+    return Promise.reject(err);
+  }
+
   const token = getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
@@ -50,7 +57,7 @@ api.interceptors.response.use(
 
     // Surface errors as toasts — skip 401 on auth endpoints (handled inline)
     // skip 404 (expected empty states), 400 (handled inline), 401 on auth, enrollment 403s
-    const skipToast = status === 404 || status === 400 || (status === 401 && isAuthEndpoint) || isEnrollmentCode;
+    const skipToast = status === 404 || status === 400 || isAuthEndpoint || isEnrollmentCode;
     if (!skipToast) {
       const msg = (err.response?.data as any)?.error
         || (err.response?.data as any)?.message

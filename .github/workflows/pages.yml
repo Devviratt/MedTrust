@@ -33,6 +33,17 @@ jobs:
         working-directory: frontend
         run: npm install --no-audit --no-fund
 
+      - name: Validate frontend API secrets
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_SOCKET_URL: ${{ secrets.VITE_SOCKET_URL }}
+        run: |
+          if [ -z "$VITE_API_URL" ] || [ -z "$VITE_SOCKET_URL" ]; then
+            echo "::error::Missing required repository secrets VITE_API_URL or VITE_SOCKET_URL."
+            echo "::error::Set both secrets to your backend public URLs, then re-run this workflow."
+            exit 1
+          fi
+
       - name: Build frontend for Pages
         working-directory: frontend
         env:

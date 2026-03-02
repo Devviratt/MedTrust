@@ -35,7 +35,13 @@ export const RegisterDoctorPage: React.FC = () => {
       toast.success('Doctor account created! An admin will verify your profile.');
       navigate('/login');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Registration failed. Please try again.');
+      const status = err?.response?.status;
+      const isBackendNotConfigured = err?.code === 'API_CONFIG_MISSING' || status === 404 || status === 405;
+      setError(
+        isBackendNotConfigured
+          ? 'Backend API is not connected. Set VITE_API_URL / VITE_SOCKET_URL and backend CORS.'
+          : (err.response?.data?.error || 'Registration failed. Please try again.')
+      );
     } finally {
       setLoading(false);
     }
