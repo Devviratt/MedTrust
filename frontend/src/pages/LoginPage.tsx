@@ -31,8 +31,11 @@ export const LoginPage: React.FC = () => {
       navigate(roleDest(user.role), { replace: true });
     } catch (err: any) {
       const isNetworkError = err?.code === 'ERR_NETWORK' || err?.message === 'Network Error';
+      const isBackendNotConfigured = err?.response?.status === 404;
       const msg = isNetworkError
         ? 'Cannot reach server. Configure VITE_API_URL / VITE_SOCKET_URL for deployed frontend.'
+        : isBackendNotConfigured
+          ? 'Backend API is not connected. Set VITE_API_URL / VITE_SOCKET_URL and backend CORS.'
         : (err.response?.data?.error || err.message || 'Login failed. Check your credentials.');
       setError(msg);
     } finally {
