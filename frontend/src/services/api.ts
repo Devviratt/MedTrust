@@ -1,7 +1,8 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import toast from 'react-hot-toast';
+import { API_BASE_URL } from '../config/runtime';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api/v1';
+const BASE_URL = API_BASE_URL;
 
 const api: AxiosInstance = axios.create({
   baseURL: BASE_URL,

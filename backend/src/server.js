@@ -19,6 +19,10 @@ const { apiLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
 const server = http.createServer(app);
+const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 // ─── Security Middleware ──────────────────────────────────────────────────────
 app.use(helmet({
@@ -36,7 +40,7 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  origin: corsOrigins.includes('*') ? true : corsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],

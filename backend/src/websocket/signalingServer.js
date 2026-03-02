@@ -3,6 +3,10 @@ const jwt = require('jsonwebtoken');
 const { setTrustScore, getTrustScore, setCache, getCache } = require('../config/redis');
 const { logger } = require('../middleware/errorHandler');
 const { grpcCall, getBiometricClient } = require('../config/grpc');
+const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 // Shared io reference — set on init, used by frameController + streamIntervalManager
 let _io = null;
@@ -14,7 +18,7 @@ const socketToStream = new Map(); // socketId -> streamId
 const initSignalingServer = (httpServer) => {
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+      origin: corsOrigins.includes('*') ? true : corsOrigins,
       methods: ['GET', 'POST'],
       credentials: true,
     },

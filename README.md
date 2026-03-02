@@ -722,6 +722,16 @@ docker-compose -f docker-compose.yml up -d --build
 - [ ] Set `DB_SSL=true` for production PostgreSQL connections
 - [ ] Review and tighten `RATE_LIMIT_MAX` for your expected traffic
 
+### GitHub Pages Frontend
+
+If you deploy the frontend with `.github/workflows/pages.yml`, configure repository secrets:
+
+- `VITE_API_URL` (example: `https://api.your-domain.com/api/v1`)
+- `VITE_SOCKET_URL` (example: `https://api.your-domain.com`)
+
+Also set backend `CORS_ORIGIN` to your Pages origin (example: `https://devviratt.github.io`).
+You can provide multiple values as comma-separated origins (example: `http://localhost:5173,https://devviratt.github.io`).
+
 ### Reverse Proxy (Nginx)
 
 Nginx configuration is scaffolded in `nginx/`. Key requirements:

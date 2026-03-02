@@ -37,6 +37,8 @@ jobs:
         working-directory: frontend
         env:
           VITE_BASE_PATH: /MedTrust/
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_SOCKET_URL: ${{ secrets.VITE_SOCKET_URL }}
         run: npm run build
 
       - name: Upload Pages artifact

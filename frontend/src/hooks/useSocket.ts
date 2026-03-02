@@ -2,12 +2,13 @@ import { useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuthStore } from '../store/authStore';
 import { useStreamStore } from '../store/streamStore';
+import { SOCKET_BASE_URL } from '../config/runtime';
 
 declare global {
   interface Window { __medtrustSocket: any; }
 }
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000');
+const SOCKET_URL = SOCKET_BASE_URL;
 
 let socketInstance: Socket | null = null;
 
