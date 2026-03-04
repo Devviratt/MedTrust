@@ -1,5 +1,7 @@
 const { Pool } = require('pg');
 const winston = require('winston');
+const fs = require('fs');
+const path = require('path');
 
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
@@ -7,17 +9,60 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console()],
 });
 
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT) || 5432,
-  database: process.env.DB_NAME || 'medtrust',
-  user: process.env.DB_USER || 'medtrust_user',
-  password: process.env.DB_PASSWORD || 'medtrust_password',
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
+const isDemoInMemory = () => {
+  const flag = String(process.env.DEMO_INMEMORY || '').toLowerCase();
+  return flag === 'true' || flag === '1' || flag === 'yes' || flag === 'on';
+};
+
+let pool;
+
+if (isDemoInMemory()) {
+  // Demo-mode: run with an in-memory Postgres using pg-mem.
+  // This keeps API contracts intact while removing the external DB dependency.
+  const { newDb } = require('pg-mem');
+  const crypto = require('crypto');
+  const db = newDb({ autoCreateForeignKeyIndices: true });
+
+  // Provide common Postgres UUID helpers used by migrations/schemas.
+  db.public.registerFunction({
+    name: 'gen_random_uuid',
+    returns: 'uuid',
+    impure: true,
+    implementation: () => crypto.randomUUID(),
+  });
+  db.public.registerFunction({
+    name: 'uuid_generate_v4',
+    returns: 'uuid',
+    impure: true,
+    implementation: () => crypto.randomUUID(),
+  });
+
+  try {
+    const schemaPath = path.join(__dirname, '..', 'utils', 'demo_schema.sql');
+    const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+    db.public.none(schemaSql);
+    logger.info('Loaded demo schema into in-memory database', { schemaPath });
+  } catch (err) {
+    logger.error('Failed to load demo schema', { error: err.message });
+    throw err;
+  }
+
+  const pgAdapter = db.adapters.createPg();
+  pool = new pgAdapter.Pool();
+  logger.warn('Using DEMO_INMEMORY database (pg-mem). Data is not persistent.');
+} else {
+  pool = new Pool({
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT) || 5432,
+    database: process.env.DB_NAME || 'medtrust',
+    user: process.env.DB_USER || 'medtrust_user',
+    password: process.env.DB_PASSWORD || 'medtrust_password',
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+  });
+}
 
 pool.on('connect', () => {
   logger.info('PostgreSQL client connected');

@@ -9,7 +9,43 @@ const logger = winston.createLogger({
 
 let redisClient;
 
+const isDemoInMemory = () => {
+  const flag = String(process.env.DEMO_INMEMORY || '').toLowerCase();
+  return flag === 'true' || flag === '1' || flag === 'yes' || flag === 'on';
+};
+
+const createInMemoryRedisClient = () => {
+  const store = new Map(); // key -> { value: string, expiresAt: number }
+  return {
+    isOpen: true,
+    on: () => { /* no-op */ },
+    connect: async () => {},
+    setEx: async (key, ttlSeconds, value) => {
+      store.set(String(key), { value: String(value), expiresAt: Date.now() + (ttlSeconds * 1000) });
+    },
+    get: async (key) => {
+      const entry = store.get(String(key));
+      if (!entry) return null;
+      if (Date.now() > entry.expiresAt) {
+        store.delete(String(key));
+        return null;
+      }
+      return entry.value;
+    },
+    del: async (key) => {
+      store.delete(String(key));
+    },
+    publish: async () => {},
+  };
+};
+
 const connectRedis = async () => {
+  if (isDemoInMemory()) {
+    redisClient = createInMemoryRedisClient();
+    logger.warn('Using DEMO_INMEMORY redis (in-memory). Data is not persistent.');
+    return redisClient;
+  }
+
   redisClient = createClient({
     socket: {
       host: process.env.REDIS_HOST || 'localhost',
@@ -23,7 +59,12 @@ const connectRedis = async () => {
   redisClient.on('connect', () => logger.info('Redis client connected'));
   redisClient.on('reconnecting', () => logger.warn('Redis client reconnecting'));
 
-  await redisClient.connect();
+  try {
+    await redisClient.connect();
+  } catch (err) {
+    logger.error('Redis connect failed; falling back to in-memory cache', { error: err.message });
+    redisClient = createInMemoryRedisClient();
+  }
   return redisClient;
 };
 
