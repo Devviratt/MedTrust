@@ -675,7 +675,7 @@ router.get('/sessions/active', authenticate, noLimiter, requireEnrolled, require
 });
 
 // ─── Doctor: respond to session request (accept / reject) ────────────────────
-router.post('/sessions/:streamId/respond', authenticate, requireEnrolled, requireRole('doctor'), async (req, res) => {
+router.post('/sessions/:streamId/respond', authenticate, requireEnrolled, requireRole('doctor', 'admin'), async (req, res) => {
   try {
     const { query: dbQuery } = require('../config/database');
     const { action } = req.body; // 'accept' | 'reject'
@@ -688,7 +688,9 @@ router.post('/sessions/:streamId/respond', authenticate, requireEnrolled, requir
       [req.params.streamId]
     );
     if (stream.rows.length === 0) return res.status(404).json({ error: 'Session not found' });
-    if (stream.rows[0].doctor_id !== req.user.id) return res.status(403).json({ error: 'Not your session' });
+    if (stream.rows[0].doctor_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not your session' });
+    }
     if (stream.rows[0].status !== 'pending') return res.status(409).json({ error: 'Session is not pending' });
 
     if (action === 'reject') {
@@ -997,14 +999,16 @@ router.get('/sessions/:streamId/trust', authenticate, noLimiter, requireRole('do
 });
 
 // ─── Patient: cancel / disconnect session ────────────────────────────────────
-router.post('/sessions/:streamId/cancel', authenticate, requireRole('patient'), async (req, res) => {
+router.post('/sessions/:streamId/cancel', authenticate, requireRole('patient', 'admin'), async (req, res) => {
   try {
     const { query: dbQuery } = require('../config/database');
     const stream = await dbQuery(
       `SELECT id, patient_id, status FROM streams WHERE id = $1`, [req.params.streamId]
     );
     if (stream.rows.length === 0) return res.status(404).json({ error: 'Session not found' });
-    if (stream.rows[0].patient_id !== req.user.id) return res.status(403).json({ error: 'Not your session' });
+    if (stream.rows[0].patient_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not your session' });
+    }
     await dbQuery(`UPDATE streams SET status = 'ended', ended_at = NOW() WHERE id = $1`, [req.params.streamId]);
     return res.json({ message: 'Session cancelled' });
   } catch (err) {

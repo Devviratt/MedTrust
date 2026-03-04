@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { useSocket, onSessionBlocked } from '../hooks/useSocket';
-import { sessionApi } from '../services/api';
+import { sessionApi, streamsApi } from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Shield, Square, Loader2, AlertTriangle, Clock,
@@ -82,6 +82,9 @@ function useWebRTC(streamId: string | null, connect: () => any) {
   const peerSocketIdRef = useRef<string | null>(null);
   const retryTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localStreamRef  = useRef<MediaStream | null>(null);
+  const makingOfferRef  = useRef(false);
+  const ignoreOfferRef  = useRef(false);
+  const isPolitePeer = false;
 
   const [localStream,    setLocalStream]    = useState<MediaStream | null>(null);
   const [hasRemote,      setHasRemote]      = useState(false);
@@ -130,7 +133,8 @@ function useWebRTC(streamId: string | null, connect: () => any) {
     // Attach local tracks immediately if stream is available
     const s = stream ?? localStreamRef.current;
     if (s) {
-      s.getTracks().forEach(t => pc.addTrack(t, s));
+      // Deterministic m-line ordering: audio first, then video.
+      [...s.getAudioTracks(), ...s.getVideoTracks()].forEach((t) => pc.addTrack(t, s));
     }
 
     // Remote stream → attach to video element
@@ -201,7 +205,8 @@ function useWebRTC(streamId: string | null, connect: () => any) {
     const pc = pcRef.current;
     if (pc.signalingState === 'closed') return;
     const existingIds = pc.getSenders().map(s => s.track?.id);
-    localStream.getTracks().forEach(t => {
+    // Keep addTrack order stable with initial offer: audio -> video.
+    [...localStream.getAudioTracks(), ...localStream.getVideoTracks()].forEach((t) => {
       if (!existingIds.includes(t.id)) pc.addTrack(t, localStream);
     });
   }, [localStream]);
@@ -214,11 +219,15 @@ function useWebRTC(streamId: string | null, connect: () => any) {
     peerSocketIdRef.current = targetSocketId;
     const pc = getPC();
     try {
+      if (makingOfferRef.current || pc.signalingState !== 'stable') return;
+      makingOfferRef.current = true;
       const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
       await pc.setLocalDescription(offer);
       sock.emit('webrtc-offer', { targetSocketId, offer, streamId });
     } catch (err: any) {
       toast.error(`Offer failed: ${err.message}`);
+    } finally {
+      makingOfferRef.current = false;
     }
   }, [streamId, getPC, getSocket]);
 
@@ -244,7 +253,14 @@ function useWebRTC(streamId: string | null, connect: () => any) {
       if (!sock) return;
       const pc = getPC();
       try {
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const offerDesc = new RTCSessionDescription(offer);
+        const offerCollision = makingOfferRef.current || pc.signalingState !== 'stable';
+        ignoreOfferRef.current = !isPolitePeer && offerCollision;
+        if (ignoreOfferRef.current) return;
+        if (offerCollision) {
+          await pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit).catch(() => {});
+        }
+        await pc.setRemoteDescription(offerDesc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         sock.emit('webrtc-answer', { targetSocketId: fromSocketId, answer, streamId });
@@ -255,6 +271,7 @@ function useWebRTC(streamId: string | null, connect: () => any) {
 
     const handleAnswer = async ({ answer }: any) => {
       try {
+        if (ignoreOfferRef.current) return;
         if (pcRef.current && pcRef.current.signalingState !== 'closed') {
           await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
         }
@@ -263,6 +280,7 @@ function useWebRTC(streamId: string | null, connect: () => any) {
 
     const handleIce = async ({ candidate }: any) => {
       try {
+        if (ignoreOfferRef.current) return;
         if (pcRef.current && pcRef.current.signalingState !== 'closed' && candidate) {
           await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
         }
@@ -273,6 +291,8 @@ function useWebRTC(streamId: string | null, connect: () => any) {
       setHasRemote(false);
       setPeerDisconnected(true);
       peerSocketIdRef.current = null;
+      ignoreOfferRef.current = false;
+      makingOfferRef.current = false;
       // Reset PC so it's ready for the peer to reconnect
       pcRef.current?.close();
       pcRef.current = null;
@@ -297,7 +317,7 @@ function useWebRTC(streamId: string | null, connect: () => any) {
       sock.off('ice-candidate', handleIce);
       sock.off('peer-left',     handlePeerLeft);
     };
-  }, [streamId, getPC, getSocket, sendOffer]);
+  }, [streamId, getPC, getSocket, sendOffer, isPolitePeer]);
 
   const stopAll = useCallback(() => {
     if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -305,6 +325,8 @@ function useWebRTC(streamId: string | null, connect: () => any) {
     pcRef.current?.close();
     pcRef.current = null;
     peerSocketIdRef.current = null;
+    makingOfferRef.current = false;
+    ignoreOfferRef.current = false;
     localStreamRef.current = null;
     setLocalStream(null);
     setHasRemote(false);
@@ -417,11 +439,15 @@ export const DashboardPage: React.FC = () => {
     if (!streamId) return;
     setEnding(true);
     try {
-      await sessionApi.cancelSession(streamId);
-    } catch { /* still navigate */ }
-    stopAll();
-    toast.success('Session ended');
-    navigate('/doctor-dashboard', { replace: true });
+      await streamsApi.end(streamId);
+      stopAll();
+      toast.success('Session ended');
+      navigate('/doctor-dashboard', { replace: true });
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to end session');
+    } finally {
+      setEnding(false);
+    }
   };
 
   const trust     = patientTrust?.trust_score ?? 0;

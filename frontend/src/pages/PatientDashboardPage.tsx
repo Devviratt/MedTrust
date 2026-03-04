@@ -21,6 +21,8 @@ function usePatientWebRTC(streamId: string | null) {
   const peerSocketIdRef = useRef<string | null>(null);
   const retryTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localStreamRef  = useRef<MediaStream | null>(null);
+  const makingOfferRef  = useRef(false);
+  const ignoreOfferRef  = useRef(false);
 
   const [localStream,      setLocalStream]      = useState<MediaStream | null>(null);
   const [hasRemote,        setHasRemote]        = useState(false);
@@ -29,6 +31,7 @@ function usePatientWebRTC(streamId: string | null) {
   const [micMuted,         setMicMuted]         = useState(false);
   const [camOff,           setCamOff]           = useState(false);
   const [mediaReady,       setMediaReady]       = useState(false);
+  const isPolitePeer = true;
 
   const getSocket = useCallback(() => (window as any).__medtrustSocket ?? null, []);
 
@@ -67,7 +70,10 @@ function usePatientWebRTC(streamId: string | null) {
     });
 
     const s = stream ?? localStreamRef.current;
-    if (s) s.getTracks().forEach(t => pc.addTrack(t, s));
+    if (s) {
+      // Deterministic m-line ordering: audio first, then video.
+      [...s.getAudioTracks(), ...s.getVideoTracks()].forEach((t) => pc.addTrack(t, s));
+    }
 
     pc.ontrack = (e) => {
       setHasRemote(true);
@@ -131,7 +137,8 @@ function usePatientWebRTC(streamId: string | null) {
     const pc = pcRef.current;
     if (pc.signalingState === 'closed') return;
     const existingIds = pc.getSenders().map(s => s.track?.id);
-    localStream.getTracks().forEach(t => {
+    // Keep addTrack order stable with initial offer: audio -> video.
+    [...localStream.getAudioTracks(), ...localStream.getVideoTracks()].forEach((t) => {
       if (!existingIds.includes(t.id)) pc.addTrack(t, localStream);
     });
   }, [localStream]);
@@ -143,11 +150,15 @@ function usePatientWebRTC(streamId: string | null) {
     peerSocketIdRef.current = targetSocketId;
     const pc = getPC();
     try {
+      if (makingOfferRef.current || pc.signalingState !== 'stable') return;
+      makingOfferRef.current = true;
       const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
       await pc.setLocalDescription(offer);
       sock.emit('webrtc-offer', { targetSocketId, offer, streamId });
     } catch (err: any) {
       toast.error(`Offer failed: ${err.message}`);
+    } finally {
+      makingOfferRef.current = false;
     }
   }, [streamId, getPC, getSocket]);
 
@@ -168,7 +179,14 @@ function usePatientWebRTC(streamId: string | null) {
       if (!sock) return;
       const pc = getPC();
       try {
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const offerDesc = new RTCSessionDescription(offer);
+        const offerCollision = makingOfferRef.current || pc.signalingState !== 'stable';
+        ignoreOfferRef.current = !isPolitePeer && offerCollision;
+        if (ignoreOfferRef.current) return;
+        if (offerCollision) {
+          await pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit).catch(() => {});
+        }
+        await pc.setRemoteDescription(offerDesc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         sock.emit('webrtc-answer', { targetSocketId: fromSocketId, answer, streamId });
@@ -178,13 +196,15 @@ function usePatientWebRTC(streamId: string | null) {
     };
     const handleAnswer = async ({ answer }: any) => {
       try {
-        if (pcRef.current && pcRef.current.signalingState !== 'closed')
+        if (!pcRef.current || ignoreOfferRef.current) return;
+        if (pcRef.current.signalingState !== 'closed')
           await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
       } catch { /* ignore */ }
     };
     const handleIce = async ({ candidate }: any) => {
       try {
-        if (pcRef.current && pcRef.current.signalingState !== 'closed' && candidate)
+        if (!pcRef.current || ignoreOfferRef.current) return;
+        if (pcRef.current.signalingState !== 'closed' && candidate)
           await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
       } catch { /* ignore stale */ }
     };
@@ -192,6 +212,8 @@ function usePatientWebRTC(streamId: string | null) {
       setHasRemote(false);
       setPeerDisconnected(true);
       peerSocketIdRef.current = null;
+      ignoreOfferRef.current = false;
+      makingOfferRef.current = false;
       pcRef.current?.close();
       pcRef.current = null;
       if (remoteRef.current) remoteRef.current.srcObject = null;
@@ -214,7 +236,7 @@ function usePatientWebRTC(streamId: string | null) {
       sock.off('ice-candidate', handleIce);
       sock.off('peer-left',     handlePeerLeft);
     };
-  }, [streamId, getPC, getSocket, sendOffer]);
+  }, [streamId, getPC, getSocket, sendOffer, isPolitePeer]);
 
   const stopAll = useCallback(() => {
     if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -222,6 +244,8 @@ function usePatientWebRTC(streamId: string | null) {
     pcRef.current?.close();
     pcRef.current = null;
     peerSocketIdRef.current = null;
+    makingOfferRef.current = false;
+    ignoreOfferRef.current = false;
     localStreamRef.current = null;
     setLocalStream(null);
     setHasRemote(false);
@@ -345,6 +369,7 @@ export const PatientDashboardPage: React.FC = () => {
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [terminated, setTerminated] = useState<string | null>(null);
   const [highRiskBanner, setHighRiskBanner] = useState(false);
+  const [endingSession, setEndingSession] = useState(false);
   const trustPollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── WebRTC ─────────────────────────────────────────────────────────────────
@@ -479,6 +504,24 @@ export const PatientDashboardPage: React.FC = () => {
       toast.error(err.response?.data?.error || 'Failed to connect');
     } finally { setConnecting(false); setConnectingId(null); }
   };
+
+  const handleLeaveSession = useCallback(async () => {
+    if (!session?.id) {
+      stopRtc();
+      return;
+    }
+    setEndingSession(true);
+    try {
+      await sessionApi.cancelSession(session.id);
+      toast.success('Session ended');
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to end session');
+    } finally {
+      stopRtc();
+      setEndingSession(false);
+      load();
+    }
+  }, [session?.id, stopRtc, load]);
 
   // ── Derived values ─────────────────────────────────────────────────────────
   const hasSession  = !!session;
@@ -717,9 +760,11 @@ export const PatientDashboardPage: React.FC = () => {
                           style={{ width: 44, height: 44, borderRadius: '50%', cursor: 'pointer', border: `1px solid ${camOff ? 'var(--status-danger-border)' : 'var(--border-default)'}`, background: camOff ? 'var(--status-danger-dim)' : 'var(--bg-elevated)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           {camOff ? <VideoOff size={16} style={{ color: 'var(--status-danger)' }} /> : <Video size={16} style={{ color: 'var(--text-secondary)' }} />}
                         </button>
-                        <button onClick={() => { stopRtc(); }} title="Leave call"
+                        <button onClick={handleLeaveSession} title="Leave call" disabled={endingSession}
                           style={{ width: 52, height: 52, borderRadius: '50%', cursor: 'pointer', background: 'var(--status-danger)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 14px rgba(239,68,68,0.45)' }}>
-                          <PhoneOff size={18} style={{ color: '#fff' }} />
+                          {endingSession
+                            ? <Loader2 size={18} style={{ color: '#fff', animation: 'spin 0.8s linear infinite' }} />
+                            : <PhoneOff size={18} style={{ color: '#fff' }} />}
                         </button>
                       </div>
                     </div>
